@@ -1,0 +1,41 @@
+{
+  "build": {
+    "version": "0.0.1-dev",
+    "mode": "local",
+    "commit": "abc1234",
+    "author": "dev",
+    "date": "2026-03-10T00:00:00Z",
+    "branch": "main"
+  },
+  "gcp": {
+    "project": "mock-project",
+    "region": "northamerica-northeast1",
+    "zone": "northamerica-northeast1-a",
+    "numericProjectId": "123456789",
+    "runtimeAccount": "agent-runtime-sp@mock-project.iam.gserviceaccount.com",
+    "workerAccount": "ar-agent-worker@mock-project.iam.gserviceaccount.com",
+    "slackBotAccount": "ar-slack-bot@mock-project.iam.gserviceaccount.com",
+    "vpcConnector": ""
+  },
+  "cloudRun": {
+    "service": "ar-control-plane",
+    "revision": "@ar/control-plane@0.0.1",
+    "configuration": "ar-control-plane",
+    "uri": "https://ar-control-plane-mock.run.app",
+    "latestRevision": "ar-control-plane-00001",
+    "createdAt": "2026-03-01T12:00:00Z",
+    "updatedAt": "2026-03-10T08:00:00Z",
+    "executionEnvironment": "gen2",
+    "timeout": "60s",
+    "cpu": "1",
+    "memory": "1Gi",
+    "minInstances": 0,
+    "maxInstances": 1
+  },
+  "storage": {
+    "bucket": "mock-project-ar-registry",
+    "tenant": "local",
+    "files": 42,
+    "bytes": 1048576
+  }
+}

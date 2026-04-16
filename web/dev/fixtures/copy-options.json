@@ -1,0 +1,41 @@
+{
+  "isAdmin": true,
+  "agents": [
+    {
+      "slug": "hello-world",
+      "name": "Hello World",
+      "visibility": "public",
+      "tenantId": "local"
+    },
+    {
+      "slug": "code-reviewer",
+      "name": "Code Reviewer",
+      "visibility": "public",
+      "tenantId": "local"
+    },
+    {
+      "slug": "data-pipeline",
+      "name": "Data Pipeline",
+      "visibility": "private",
+      "tenantId": "local"
+    },
+    {
+      "slug": "onboarding-bot",
+      "name": "Onboarding Bot",
+      "visibility": "private",
+      "tenantId": "production"
+    },
+    {
+      "slug": "deploy-agent",
+      "name": "Deploy Agent",
+      "visibility": "public",
+      "tenantId": "production"
+    }
+  ],
+  "tenants": [
+    { "id": "local", "name": "local" },
+    { "id": "development", "name": "development" },
+    { "id": "production", "name": "production" },
+    { "id": "staging", "name": "staging" }
+  ]
+}

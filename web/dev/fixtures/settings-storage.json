@@ -1,0 +1,26 @@
+{
+  "totalFiles": 42,
+  "totalBytes": 1048576,
+  "items": [
+    {
+      "name": "local/agents/hello-world/1.0.0/source.tar.gz",
+      "size": "42510",
+      "updated": "2026-03-10T09:00:00Z"
+    },
+    {
+      "name": "local/agents/hello-world/output/report-2026-03.json",
+      "size": "8192",
+      "updated": "2026-03-10T08:00:00Z"
+    },
+    {
+      "name": "local/agents/code-reviewer/output/reviews/pr-142.json",
+      "size": "12288",
+      "updated": "2026-03-09T14:30:00Z"
+    },
+    {
+      "name": "local/agents/data-pipeline/output/pipeline/batch-001.json",
+      "size": "65536",
+      "updated": "2026-03-08T11:15:00Z"
+    }
+  ]
+}

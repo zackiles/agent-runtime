@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "type": "agent",
+      "id": "hello-world",
+      "label": "Hello World",
+      "isConflict": false
+    },
+    {
+      "type": "tool",
+      "id": "cursor",
+      "label": "Cursor Tool",
+      "isConflict": false
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@ar/web",
+  "version": "0.0.1",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "fmt": {
+    "lineWidth": 80,
+    "semiColons": false,
+    "useTabs": false,
+    "indentWidth": 2,
+    "singleQuote": true,
+    "proseWrap": "preserve",
+    "include": ["mod.ts", "src/**", "dev/**"]
+  },
+  "lint": {
+    "rules": { "tags": ["recommended"] },
+    "include": ["deno.jsonc", "mod.ts", "src/**", "dev/**"]
+  },
+  "imports": {
+    "@deno/gfm": "jsr:@deno/gfm@^0.12.0"
+  }
+}

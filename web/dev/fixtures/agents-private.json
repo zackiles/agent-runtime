@@ -1,0 +1,60 @@
+[
+  {
+    "id": "a1",
+    "name": "My Weather Bot",
+    "slug": "my-weather-bot",
+    "status": "deployed",
+    "visibility": "private",
+    "team": "personal",
+    "department": "Engineering",
+    "isLead": true,
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "version": "0.0.3",
+    "updatedAt": "2026-03-14T10:00:00Z",
+    "createdBy": "dev@local",
+    "edges": [
+      {
+        "id": 1,
+        "direction": "consumes",
+        "type": "webhook",
+        "config": { "id": "wh-priv-1" }
+      },
+      {
+        "id": 2,
+        "direction": "publishes",
+        "type": "slack",
+        "config": { "channel": "#weather" }
+      }
+    ]
+  },
+  {
+    "id": "a5",
+    "name": "My Notes Agent",
+    "slug": "my-notes-agent",
+    "status": "draft",
+    "visibility": "private",
+    "team": "personal",
+    "department": "Product",
+    "isLead": true,
+    "subsystem": "cursor",
+    "sourceType": "prompt",
+    "version": "0.1.0",
+    "updatedAt": "2026-03-13T15:30:00Z",
+    "createdBy": "dev@local",
+    "edges": [
+      {
+        "id": 3,
+        "direction": "consumes",
+        "type": "webhook",
+        "config": { "id": "wh-priv-2" }
+      },
+      {
+        "id": 4,
+        "direction": "publishes",
+        "type": "webhook",
+        "config": { "id": "wh-priv-3" }
+      }
+    ]
+  }
+]

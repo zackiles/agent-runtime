@@ -1,0 +1,9 @@
+{
+  "name": "cursor",
+  "slug": "cursor",
+  "version": "0.0.1",
+  "flags": ["-p", "--force", "--trust"],
+  "env": {
+    "CURSOR_API_KEY": "${CURSOR_API_KEY}"
+  }
+}

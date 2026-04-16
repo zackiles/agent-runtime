@@ -1,0 +1,2 @@
+sdk-agent-nodejs/bin/*.js filter=lfs diff=lfs merge=lfs -text
+sdk-agent-nodejs/bin/*.js.map filter=lfs diff=lfs merge=lfs -text

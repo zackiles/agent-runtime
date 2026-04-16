@@ -1,0 +1,54 @@
+{
+  // Dev Container configuration optimized for Cursor programmatic launching
+  //
+  // CURSOR-SPECIFIC REQUIREMENTS:
+  // 1. workspaceFolder: "/workspace" must match the URI construction in test.ts
+  // 2. Docker socket mounting is critical for Cursor's container management
+  // 3. Proper user configuration ensures compatibility with Cursor's remote features
+  // 4. These settings work seamlessly with the programmatic URI launch approach
+
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/refs/heads/main/schemas/devContainer.base.schema.json",
+  "name": "DenoContainer",
+  "dockerFile": "Dockerfile",
+  "shutdownAction": "stopContainer",
+
+  // Docker run arguments for Cursor compatibility
+  // --init: Ensures proper signal handling in container
+  // --privileged: Required for Docker-in-Docker functionality (mounting docker.sock)
+  "runArgs": [
+    "--init",
+    "--privileged"
+  ],
+
+  // Mount configurations essential for Cursor dev container functionality
+  "mounts": [
+    // Docker socket mount - CRITICAL for Cursor's container management
+    // Enables building containers from within the dev container
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+
+    // SSH keys mount for seamless Git operations
+    // Allows using existing SSH keys for Git operations within the container
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+  ],
+
+  // Extension configuration - works identically in Cursor and VS Code
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "denoland.vscode-deno" // Essential Deno extension for development
+      ]
+    }
+  },
+
+  // Port forwarding - configure as needed for your application
+  "forwardPorts": [],
+
+  // User configuration for Cursor compatibility
+  "remoteUser": "vscode", // Matches the user created in Dockerfile
+  "updateRemoteUserUID": false, // Maintains consistent permissions
+
+  // Workspace mounting - CRITICAL for Cursor programmatic launch
+  // These exact paths are referenced in the URI construction in test.ts
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace" // Must match workspacePath in test.ts URI construction
+}

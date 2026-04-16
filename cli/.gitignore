@@ -1,0 +1,14 @@
+# Hypermix/Repomix generated context files
+.ai/**/*.xml
+
+bin
+dist
+coverage
+node_modules
+.DS_Store
+pids
+*.pid
+*.seed
+*.pid.lock
+*.log
+.env

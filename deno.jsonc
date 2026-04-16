@@ -1,0 +1,101 @@
+{
+  "workspace": [
+    "./cli",
+    "./control-plane",
+    "./web",
+    "./sdk-client-deno",
+    "./sdk-agent-nodejs"
+  ],
+  "tasks": {
+    // Run the CLI from source. Proxies all ar commands, e.g.:
+    //   deno task ar help
+    //   deno task ar status
+    //   deno task ar deploy my-agent
+    //   deno task ar cp deploy
+    //   deno task ar tool deploy my-tool
+    //   deno task ar connect https://my-cp.run.app
+    "ar": "cd cli && deno run -A src/cli.ts",
+
+    // Start the CLI in dev mode with file watching and debug logging.
+    // Runs in: Deno (local)
+    "dev": "cd cli && DENO_ENV=development deno run -A --watch --log-level=debug src/cli.ts",
+
+    // Start the web dashboard with a mocked control plane API.
+    // Uses system shell to run npm (Vite requires Node.js, not Deno).
+    // Runs in: Node/Vite (local, no GCP needed)
+    "dev:web": "sh -c 'cd web && npm run dev'",
+
+    // Start the web dashboard against a live control plane.
+    // Set AR_CP_URL to the target. Runs in: Node/Vite (local)
+    "dev:web:remote": "sh -c 'cd web && npm run dev:remote'",
+
+    // Format, lint (with autofix), and type-check all Deno packages.
+    // Mirrors the CI quality gate. Runs in: Deno (local)
+    "check": "deno fmt && deno lint --fix && deno check cli/src/**/*.ts sdk-client-deno/src/**/*.ts control-plane/src/**/*.ts",
+
+    // Run the test suite. Accepts args, e.g. deno task test workspace.
+    // Runs in: Deno (local, some tests require gcloud auth)
+    "test": "cd cli && DENO_ENV=test deno run -A scripts/test.ts",
+
+    // Full production build: web assets + control plane binary + CLI binary.
+    // Accepts a version arg, e.g. deno task build 0.1.0.
+    // Runs in: Deno + Node (local)
+    "build": "deno run -A cli/scripts/build.ts",
+
+    // Build web assets only (outputs to web/dist/).
+    // Uses system shell to run npm (Vite requires Node.js, not Deno).
+    // Runs in: Node/Vite (local)
+    "build:web": "sh -c 'cd web && npm ci && npx vite build'",
+
+    // Build the Node.js agent runtime library (outputs to sdk-agent-nodejs/bin/).
+    // Runs in: Node/esbuild (local)
+    "build:sdk": "sh -c 'cd sdk-agent-nodejs && npm install && npm run build'",
+
+    // Create a semver tag, commit any dirty changes, sync with remote, and
+    // push the tag. Triggers the CI release pipeline.
+    // Runs in: Deno + git (local)
+    "tag": "cd cli && deno run -A scripts/tag.ts",
+
+    // Deploy the control plane to GCP from source (compiles CP binary,
+    // builds Docker image, pushes to Cloud Run).
+    // Runs in: Deno + gcloud (requires GCP auth)
+    "deploy:cp": "cd cli && deno run -A src/cli.ts cp deploy",
+
+    // Generate HTML API documentation from source.
+    // Runs in: Deno (local)
+    "docs": "cd cli && deno doc --html --name=ar-cli --output=./docs/ar-cli src/**/*.ts",
+
+    // Serve generated docs locally and open in browser.
+    // Runs in: Deno (local)
+    "docs:serve": "cd cli && deno run -A scripts/serve-docs.ts"
+  },
+  "fmt": {
+    "lineWidth": 80,
+    "semiColons": false,
+    "useTabs": false,
+    "indentWidth": 2,
+    "singleQuote": true,
+    "proseWrap": "preserve"
+  },
+  "lint": {
+    "rules": { "tags": ["recommended"] }
+  },
+  "exclude": [
+    "sdk-agent-nodejs/",
+    "default-registry/",
+    "sdk-agent-nodejs/agent-host.js"
+  ],
+  "lock": true,
+  "nodeModulesDir": "none",
+  "unstable": [
+    "kv",
+    "net",
+    "http",
+    "fs",
+    "ffi",
+    "cron",
+    "temporal",
+    "unsafe-proto",
+    "webgpu"
+  ]
+}

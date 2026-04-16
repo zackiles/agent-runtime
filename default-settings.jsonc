@@ -1,0 +1,124 @@
+{
+  // Agent Runtime — global configuration
+
+  "version": "0.0.1",
+
+  "registry": {
+    "path": "default-registry"
+  },
+
+  "data": {
+    "path": "data"
+  },
+
+  "platform": {
+    "project": "",
+    "runtime": "nodejs22",
+    "region": "northamerica-northeast1",
+    "runtimeAccountPattern": "agent-runtime-sp@${project}.iam.gserviceaccount.com",
+    "workerAccountPattern": "agent-worker-sp@${project}.iam.gserviceaccount.com",
+    "compileTarget": "x86_64-unknown-linux-gnu"
+  },
+
+  "agents": {
+    "deployMode": "container",
+    "baseImage": "node:22-slim",
+    "artifactRepo": "ar-agents"
+  },
+
+  "controlPlane": {
+    "serviceName": "ar-control-plane",
+    "port": 8080,
+    "baseImage": "debian:trixie-slim",
+    "dbPath": "/data",
+    "memory": "1Gi",
+    "cpu": 1,
+    "timeout": 60,
+    "concurrency": 80,
+    "minInstances": 0,
+    // IMPORTANT: Do not increase past 1 until a distributed database
+    // replaces SQLite. Multiple instances will corrupt the database.
+    "maxInstances": 1,
+    // NOTE: Only enable when maxInstances is greater than 1.
+    "sessionAffinity": false,
+    "startupCpuBoost": true,
+    "cpuThrottling": false
+  },
+
+  "runtimeAccountRoles": [
+    "roles/cloudfunctions.developer",
+    "roles/run.admin",
+    "roles/run.invoker",
+    "roles/iam.serviceAccountUser",
+    "roles/secretmanager.admin",
+    "roles/storage.admin",
+    "roles/cloudscheduler.admin",
+    "roles/artifactregistry.repoAdmin",
+    "roles/cloudbuild.builds.editor",
+    "roles/iam.serviceAccountTokenCreator",
+    "roles/aiplatform.user"
+  ],
+
+  "workerAccountRoles": [
+    "roles/run.invoker",
+    "roles/logging.logWriter",
+    "roles/artifactregistry.reader",
+    "roles/storage.objectViewer",
+    "roles/secretmanager.secretAccessor"
+  ],
+
+  "tenants": {
+    "default": "development",
+    "bootstrapped": ["development", "production"]
+  },
+
+  // Default tools installed when bootstrapping the control plane.
+  // Tool-specific config (binary, install, flags, env) lives in each
+  // tool's own tool.json at default-registry/tools/<slug>/<version>/tool.json.
+  "tools": [
+    { "slug": "cursor", "version": "0.0.1" },
+    { "slug": "claude", "version": "0.0.1" },
+    { "slug": "github", "version": "0.0.1" },
+    { "slug": "auth0", "version": "0.0.1" },
+    { "slug": "datadog", "version": "0.0.1" },
+    { "slug": "gemini", "version": "0.0.1" }
+  ],
+
+  // Secrets deployed to GCP Secret Manager and wired into agent functions.
+  // Values come from secrets.jsonc (local) or environment variables (CI).
+  // Each entry maps a Secret Manager name to its environment variable name.
+  "secrets": {
+    "cursor-api-key": "CURSOR_API_KEY",
+    "anthropic-api-key": "ANTHROPIC_API_KEY",
+    "gh-token": "GH_TOKEN",
+    "dd-api-key": "DD_API_KEY",
+    "dd-app-key": "DD_APP_KEY",
+    "dd-site": "DD_SITE",
+    "auth0-domain": "AUTH0_DOMAIN",
+    "auth0-client-id": "AUTH0_CLIENT_ID",
+    "auth0-client-secret": "AUTH0_CLIENT_SECRET",
+    "jira-service-account-email": "JIRA_SERVICE_ACCOUNT_EMAIL",
+    "jira-service-key": "JIRA_SERVICE_KEY",
+    "incident-io-api-key": "INCIDENT_IO_API_KEY",
+    "google-client-id": "GOOGLE_CLIENT_ID",
+    "google-client-secret": "GOOGLE_CLIENT_SECRET",
+    "slack-bot-token": "SLACK_BOT_TOKEN",
+    "slack-signing-secret": "SLACK_SIGNING_SECRET",
+    "slack-client-id": "SLACK_CLIENT_ID",
+    "slack-client-secret": "SLACK_CLIENT_SECRET",
+    "ar-session-secret": "AR_SESSION_SECRET",
+    "ar-admin-group": "AR_ADMIN_GROUP",
+    "ar-allowed-domains": "AR_ALLOWED_DOMAINS"
+  },
+
+  "bot": {
+    "name": "ar",
+    "displayName": "Agent Runtime"
+  },
+
+  "build": {
+    "denoVersion": "2.1.4",
+    "defaultVersion": "0.0.0-dev",
+    "defaultMode": "development"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@ar/control-plane",
+  "version": "0.0.1",
+  "exports": {
+    ".": "./src/mod.ts"
+  },
+  "imports": {
+    "@hono/hono": "jsr:@hono/hono@^4.12.5",
+    "@std/encoding": "jsr:@std/encoding@1",
+    "@std/fs": "jsr:@std/fs@1",
+    "@std/path": "jsr:@std/path@1",
+    "@deno/gfm": "jsr:@deno/gfm@^0.12.0"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noErrorTruncation": true,
+    "exactOptionalPropertyTypes": true,
+    "lib": [
+      "esnext",
+      "deno.window",
+      "deno.unstable",
+      "deno.worker",
+      "decorators"
+    ]
+  },
+  "fmt": {
+    "lineWidth": 80,
+    "semiColons": false,
+    "useTabs": false,
+    "indentWidth": 2,
+    "singleQuote": true,
+    "proseWrap": "preserve",
+    "include": ["src/**"]
+  },
+  "lint": {
+    "rules": { "tags": ["recommended"] },
+    "include": ["deno.jsonc", "src/**"]
+  }
+}

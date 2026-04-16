@@ -1,0 +1,68 @@
+[
+  {
+    "id": "pa-1",
+    "name": "Support Triage",
+    "slug": "support-triage",
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "status": "deployed",
+    "team": "support",
+    "department": "Operations",
+    "isLead": true,
+    "versions": [
+      {
+        "version": "0.0.2",
+        "prompt": "# Support Triage\n\nYou are a support triage agent.\n\n## Context\n\n- **Caller**: {{request.headers.x-caller-id}}\n- **Priority**: {{request.body.priority}}\n\n## Instructions\n\nClassify the support ticket in `{{request.body.message}}` into one of:\n- billing\n- technical\n- account\n- general\n\nReturn a JSON object with `category`, `confidence`, and `suggestedAction`.",
+        "createdAt": "2026-03-12T10:00:00Z",
+        "active": true
+      },
+      {
+        "version": "0.0.1",
+        "prompt": "# Support Triage\n\nClassify support tickets into categories.",
+        "createdAt": "2026-03-10T09:00:00Z",
+        "active": false
+      }
+    ],
+    "updatedAt": "2026-03-12T10:00:00Z"
+  },
+  {
+    "id": "pa-2",
+    "name": "Data Classifier",
+    "slug": "data-classifier",
+    "subsystem": "cursor",
+    "sourceType": "prompt",
+    "status": "draft",
+    "team": "data",
+    "department": "Engineering",
+    "isLead": false,
+    "versions": [
+      {
+        "version": "0.0.1",
+        "prompt": "# Data Classifier\n\nClassify the data payload in `{{request.body.data}}` according to\nthe schema defined in `{{request.body.schema}}`.\n\nReturn a JSON object with `classification`, `confidence`, and `audit`.",
+        "createdAt": "2026-03-08T14:00:00Z",
+        "active": true
+      }
+    ],
+    "updatedAt": "2026-03-08T14:00:00Z"
+  },
+  {
+    "id": "pa-3",
+    "name": "Invoice Processor",
+    "slug": "invoice-processor",
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "status": "deployed",
+    "team": "platform",
+    "department": "Operations",
+    "isLead": true,
+    "versions": [
+      {
+        "version": "1.0.0",
+        "prompt": "# Invoice Processor\n\nExtract structured data from the invoice content in\n`{{request.body.content}}`.\n\n## Fields to Extract\n\n- Invoice number\n- Date\n- Vendor: `{{request.body.vendor}}`\n- Line items (array)\n- Total amount\n- Currency: `{{request.body.currency}}`\n\nReturn the extracted data as a JSON object.",
+        "createdAt": "2026-03-14T08:30:00Z",
+        "active": true
+      }
+    ],
+    "updatedAt": "2026-03-14T08:30:00Z"
+  }
+]

@@ -1,0 +1,83 @@
+{
+  "messages": [
+    {
+      "id": 1,
+      "tenantId": "development",
+      "userId": "user@example.com",
+      "slackChannelId": "C01ABC123",
+      "slackThreadTs": null,
+      "direction": "inbound",
+      "command": "/run",
+      "content": "What is the weather in Toronto?",
+      "agentId": "weather-agent",
+      "metadata": null,
+      "createdAt": "2026-03-15T14:32:00Z"
+    },
+    {
+      "id": 2,
+      "tenantId": "development",
+      "userId": "user@example.com",
+      "slackChannelId": "C01ABC123",
+      "slackThreadTs": null,
+      "direction": "outbound",
+      "command": "/run",
+      "content": "The forecast for Toronto is 12°C and partly cloudy.",
+      "agentId": "weather-agent",
+      "metadata": null,
+      "createdAt": "2026-03-15T14:32:05Z"
+    },
+    {
+      "id": 3,
+      "tenantId": "development",
+      "userId": "user@example.com",
+      "slackChannelId": "D02XYZ456",
+      "slackThreadTs": null,
+      "direction": "inbound",
+      "command": "/list",
+      "content": null,
+      "agentId": null,
+      "metadata": null,
+      "createdAt": "2026-03-15T15:00:00Z"
+    },
+    {
+      "id": 4,
+      "tenantId": "development",
+      "userId": "user@example.com",
+      "slackChannelId": "D02XYZ456",
+      "slackThreadTs": null,
+      "direction": "outbound",
+      "command": "/list",
+      "content": "3 agents available",
+      "agentId": null,
+      "metadata": null,
+      "createdAt": "2026-03-15T15:00:01Z"
+    },
+    {
+      "id": 5,
+      "tenantId": "development",
+      "userId": "user@example.com",
+      "slackChannelId": "C01ABC123",
+      "slackThreadTs": null,
+      "direction": "inbound",
+      "command": "/create-agent",
+      "content": "A bot that summarizes Jira tickets",
+      "agentId": null,
+      "metadata": null,
+      "createdAt": "2026-03-16T09:15:00Z"
+    },
+    {
+      "id": 6,
+      "tenantId": "development",
+      "userId": "user@example.com",
+      "slackChannelId": "C01ABC123",
+      "slackThreadTs": null,
+      "direction": "outbound",
+      "command": "/create-agent",
+      "content": "Agent \"jira-summarizer\" created (v0.0.1, private)",
+      "agentId": "jira-summarizer",
+      "metadata": null,
+      "createdAt": "2026-03-16T09:15:03Z"
+    }
+  ],
+  "total": 6
+}

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Runtime</title>
+    <style>
+      [data-island]:empty { display: none; }
+      #mobile-menu { display: none; }
+      #mobile-menu.open { display: block; }
+    </style>
+  </head>
+  <body class="bg-gray-50 text-gray-900 min-h-screen">
+    <nav class="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6">
+        <div class="flex items-center justify-between h-14">
+          <div class="flex items-center gap-3 md:hidden">
+            <a href="/web/me" class="shrink-0" title="dev@local">
+              <img
+                data-avatar
+                data-email="dev@local"
+                alt=""
+                class="h-8 w-8 rounded-full ring-2 ring-gray-200 hover:ring-blue-400 transition-all object-cover"
+              >
+            </a>
+            <a href="/web/" class="flex items-center gap-2 shrink-0">
+              <img src="/logo.png" alt="" class="h-7 w-auto">
+            </a>
+          </div>
+
+          <a href="/web/" class="hidden md:flex items-center gap-2 shrink-0">
+            <img src="/logo.png" alt="" class="h-7 w-auto">
+            <span class="text-sm font-semibold text-gray-800">Agent Runtime</span>
+          </a>
+
+          <div class="hidden md:flex items-center gap-0.5" id="nav-links">
+            <a href="/web/registry" data-nav="registry" data-group="main" class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">Registry</a>
+            <a href="/web/demos" data-nav="demos" data-group="main" class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">Demo Agent</a>
+            <a href="/web/access" data-nav="access" data-group="main" class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">Access Agent</a>
+            <span class="mx-1.5 h-4 w-px bg-gray-200"></span>
+            <a href="/web/system" data-nav="system" data-group="utility" class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">System</a>
+            <a href="/web/artifacts" data-nav="artifacts" data-group="utility" data-admin-only class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">Artifacts</a>
+            <a href="/web/telemetry" data-nav="telemetry" data-group="utility" data-admin-only class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">Telemetry</a>
+            <a href="/web/audit" data-nav="audit" data-group="utility" data-admin-only class="px-3 py-1.5 rounded-md text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">Audit</a>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <div class="hidden md:flex flex-col items-end">
+              <select
+                id="tenant-select"
+                disabled
+                class="text-xs border border-gray-200 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer disabled:opacity-60 disabled:cursor-default"
+              >
+                <option value="local" selected>local</option>
+              </select>
+              <div class="flex items-center gap-1 mt-0.5">
+                <a href="/web/settings" data-nav="settings" data-admin-only class="text-[10px] text-gray-400 hover:text-gray-600 transition-colors">settings</a>
+                <span class="text-[10px] text-gray-300">/</span>
+                <a href="/web/docs" data-nav="docs" class="text-[10px] text-gray-400 hover:text-gray-600 transition-colors">help</a>
+              </div>
+            </div>
+            <select
+              id="tenant-select-mobile"
+              disabled
+              class="md:hidden text-xs border border-gray-200 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer disabled:opacity-60 disabled:cursor-default"
+            >
+              <option value="local" selected>local</option>
+            </select>
+            <a href="/web/me" data-nav="me" class="hidden md:block shrink-0" title="dev@local">
+              <img
+                data-avatar
+                data-email="dev@local"
+                alt=""
+                class="h-8 w-8 rounded-full ring-2 ring-gray-200 hover:ring-blue-400 transition-all object-cover"
+              >
+            </a>
+            <button id="mobile-toggle" class="md:hidden p-1 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100" aria-label="Menu">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="mobile-menu" class="md:hidden border-t border-gray-100 bg-white">
+        <div class="px-4 py-3 space-y-1" id="mobile-nav-links">
+          <a href="/web/registry" data-nav="registry" data-group="main" class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Registry</a>
+          <a href="/web/demos" data-nav="demos" data-group="main" class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Demo Agent</a>
+          <a href="/web/access" data-nav="access" data-group="main" class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Access Agent</a>
+          <div class="border-t border-gray-100 mt-2 pt-2">
+            <a href="/web/system" data-nav="system" data-group="utility" class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">System</a>
+            <a href="/web/artifacts" data-nav="artifacts" data-group="utility" data-admin-only class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Artifacts</a>
+            <a href="/web/telemetry" data-nav="telemetry" data-group="utility" data-admin-only class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Telemetry</a>
+            <a href="/web/audit" data-nav="audit" data-group="utility" data-admin-only class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Audit</a>
+            <a href="/web/settings" data-nav="settings" data-group="utility" data-admin-only class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Settings</a>
+            <a href="/web/docs" data-nav="docs" data-group="utility" class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Help</a>
+            <a href="/web/me" data-nav="me" data-group="utility" class="block px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Me</a>
+          </div>
+        </div>
+      </div>
+    </nav>
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6" id="app">
+      <div data-island="registry-status"></div>
+      <div data-island="demos"></div>
+      <div data-island="access"></div>
+      <div data-island="me"></div>
+      <div data-island="artifacts"></div>
+      <div data-island="telemetry"></div>
+      <div data-island="audit"></div>
+      <div data-island="system"></div>
+      <div data-island="settings"></div>
+      <div data-island="docs"></div>
+    </main>
+    <script>
+      window.__AR__ = {
+        user: {
+          email: "dev@local",
+          isAdmin: true,
+          tenantId: "local",
+        },
+        tenants: ["local"],
+      };
+      (function () {
+        var path = location.pathname;
+        var links = document.querySelectorAll("#nav-links a[data-nav]");
+        links.forEach(function (a) {
+          var nav = a.getAttribute("data-nav");
+          var active = path === "/web/" + nav ||
+            path.startsWith("/web/" + nav + "/") ||
+            (nav === "registry" && (path === "/web" || path === "/web/"));
+          if (active) {
+            a.classList.remove("text-gray-500");
+            a.classList.add(
+              "text-gray-900",
+              "bg-gray-100",
+              "font-semibold",
+            );
+          }
+        });
+
+        var SIZE = 64;
+        var email = (window.__AR__.user.email || "").trim().toLowerCase();
+        var key = "ar_avatar_" + email;
+        var cached = localStorage.getItem(key);
+        function applyAvatar(url) {
+          document.querySelectorAll("[data-avatar]").forEach(function (el) {
+            el.src = url;
+          });
+        }
+        if (cached) { applyAvatar(cached); }
+        if (email) {
+          crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(email)
+          ).then(function (buf) {
+            var hex = Array.from(new Uint8Array(buf))
+              .map(function (b) { return b.toString(16).padStart(2, "0"); })
+              .join("");
+            var url = "https://www.gravatar.com/avatar/" + hex + "?s=" + SIZE + "&d=mp";
+            localStorage.setItem(key, url);
+            applyAvatar(url);
+          });
+        }
+      })();
+    </script>
+    <script type="module" src="/src/entry.ts"></script>
+  </body>
+</html>

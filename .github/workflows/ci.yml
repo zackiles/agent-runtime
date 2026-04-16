@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Lint and type-check
+        run: deno task check
+
+      - name: Run tests
+        working-directory: cli
+        run: deno test -A --check test
+
+  integration:
+    needs: check
+    if: vars.WIF_PROVIDER != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        deploy-mode: [source, container]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Authenticate to GCP (OIDC)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build CLI
+        run: deno task build 0.0.0-ci
+
+      - name: Prepare registry and settings
+        run: |
+          WORK=$(mktemp -d)
+          cp -r default-registry "$WORK/registry"
+          cat > "$WORK/settings.jsonc" << EOF
+          {
+            "project": "${{ vars.GCP_PROJECT }}",
+            "region": "${{ vars.GCP_REGION }}",
+            "runtimeAccount": "${{ vars.AR_RUNTIME_ACCOUNT }}",
+            "workerAccount": "${{ vars.AR_WORKER_ACCOUNT }}",
+            "auth": { "method": "adc" }
+          }
+          EOF
+          echo "WORK_DIR=$WORK" >> "$GITHUB_ENV"
+
+      - name: Initialize registry
+        run: |
+          ./cli/dist/ar init --no-input \
+            --registry "$WORK_DIR/registry" \
+            --settings "$WORK_DIR/settings.jsonc" \
+            --project ${{ vars.GCP_PROJECT }} \
+            --region ${{ vars.GCP_REGION }} \
+            --runtime-account ${{ vars.AR_RUNTIME_ACCOUNT }}
+        env:
+          AR_AUTH_METHOD: adc
+
+      - name: Deploy control plane (ci tenant)
+        run: |
+          ./cli/dist/ar cp deploy --no-input --force --tenant ci \
+            --registry "$WORK_DIR/registry" \
+            --settings "$WORK_DIR/settings.jsonc"
+        env:
+          AR_AUTH_METHOD: adc
+          AR_AGENT_DEPLOY_MODE: ${{ matrix.deploy-mode }}
+
+      - name: Verify control plane health
+        run: |
+          URL=$(./cli/dist/ar registry get \
+            --settings "$WORK_DIR/settings.jsonc" 2>/dev/null \
+            | grep controlPlaneUrl | head -1 \
+            | sed 's/.*"controlPlaneUrl": *"//' | sed 's/".*//')
+          if [ -n "$URL" ] && [ "$URL" != "null" ]; then
+            curl -sf "${URL}/health" && echo "Health check passed"
+          else
+            echo "No control plane URL found, skipping health check"
+          fi
+        env:
+          AR_AUTH_METHOD: adc
+
+      - name: Smoke test demo-agent
+        if: vars.CURSOR_API_KEY != ''
+        run: |
+          AR="./cli/dist/ar"
+          COMMON="--registry $WORK_DIR/registry --settings $WORK_DIR/settings.jsonc --tenant ci"
+          $AR secret set cursor-api-key "${{ vars.CURSOR_API_KEY }}" $COMMON || true
+          $AR agent deploy demo-agent $COMMON
+          RESULT=$($AR agent run demo-agent $COMMON --data '{"prompt":"Create a single index.html that shows Hello from Agent Runtime in centered text. No frameworks."}' --json)
+          echo "$RESULT" | jq .
+          echo "$RESULT" | jq -e '.demo.name' > /dev/null
+        env:
+          AR_AUTH_METHOD: adc
+          AR_AGENT_DEPLOY_MODE: ${{ matrix.deploy-mode }}
+
+      - name: Destroy all AR resources (ci cleanup)
+        if: always()
+        run: |
+          ./cli/dist/ar cp destroy --all --force \
+            --settings "$WORK_DIR/settings.jsonc"
+        env:
+          AR_AUTH_METHOD: adc

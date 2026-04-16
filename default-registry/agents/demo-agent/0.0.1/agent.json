@@ -1,0 +1,14 @@
+{
+  "name": "Demo Agent",
+  "slug": "demo-agent",
+  "version": "0.0.1",
+  "entryPoint": "handler",
+  "sourceType": "function",
+  "subsystem": "cursor",
+  "template": true,
+  "memory": "4Gi",
+  "cpu": "2",
+  "secrets": ["cursor-api-key"],
+  "triggers": [],
+  "description": "Default demo builder agent that scaffolds fullstack apps from prompts."
+}

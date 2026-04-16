@@ -1,0 +1,24 @@
+import type { ToolConfig } from "./tools.js";
+type BootstrapConfig = {
+    controlPlaneUrl: string;
+    token: string;
+    bucket: string;
+    tenantId: string;
+    agentId: string;
+    agentName: string;
+    agentVersion: string;
+    agentSlug: string;
+    department: string;
+    team: string;
+    owners: string[];
+    publishedAt: string;
+    updatedAt: string;
+    subsystem?: string | null;
+    toolsDir?: string;
+    tools?: ToolConfig[];
+};
+type HandlerFn = (request: Request) => Promise<Response>;
+declare function bootstrap(config: BootstrapConfig, handler: HandlerFn): HandlerFn;
+declare function ensureToken(): Promise<void>;
+export { bootstrap, ensureToken };
+export type { BootstrapConfig, HandlerFn };

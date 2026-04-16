@@ -1,0 +1,11 @@
+{
+  "name": "auth0",
+  "slug": "auth0",
+  "version": "0.0.1",
+  "flags": ["--no-input"],
+  "env": {
+    "AUTH0_DOMAIN": "${AUTH0_DOMAIN}",
+    "AUTH0_CLIENT_ID": "${AUTH0_CLIENT_ID}",
+    "AUTH0_CLIENT_SECRET": "${AUTH0_CLIENT_SECRET}"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "github",
+  "slug": "github",
+  "version": "0.0.1",
+  "flags": ["--no-pager"],
+  "env": {
+    "GH_TOKEN": "${GH_TOKEN}"
+  }
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "development",
+    "userCount": 5,
+    "files": 127,
+    "bytes": 4521984
+  },
+  {
+    "id": "production",
+    "userCount": 12,
+    "files": 843,
+    "bytes": 52428800
+  },
+  {
+    "id": "staging",
+    "userCount": 3,
+    "files": 64,
+    "bytes": 1048576
+  }
+]

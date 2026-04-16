@@ -1,0 +1,5 @@
+[
+  { "id": "dept-1", "name": "Engineering" },
+  { "id": "dept-2", "name": "Operations" },
+  { "id": "dept-3", "name": "Product" }
+]

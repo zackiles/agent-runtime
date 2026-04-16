@@ -1,0 +1,6 @@
+{
+  "name": "example-rule",
+  "slug": "example-rule",
+  "version": "0.0.1",
+  "globs": ["**/*.ts"]
+}

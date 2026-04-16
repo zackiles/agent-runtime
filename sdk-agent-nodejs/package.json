@@ -1,0 +1,17 @@
+{
+  "name": "@ar/sdk-agent-nodejs",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "bin/index.js",
+  "types": "bin/index.d.ts",
+  "scripts": {
+    "build": "node build.mjs",
+    "clean": "rm -rf bin"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

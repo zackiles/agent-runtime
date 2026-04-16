@@ -1,0 +1,110 @@
+[
+  {
+    "id": "a1",
+    "name": "Hello World",
+    "slug": "hello-world",
+    "status": "deployed",
+    "team": "platform",
+    "department": "Engineering",
+    "isLead": true,
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "version": "1.0.0",
+    "updatedAt": "2026-03-10T09:00:00Z",
+    "edges": [
+      {
+        "id": 1,
+        "direction": "consumes",
+        "type": "webhook",
+        "config": { "id": "wh-a1-in" }
+      },
+      {
+        "id": 2,
+        "direction": "publishes",
+        "type": "webhook",
+        "config": { "id": "wh-a1-out" }
+      }
+    ]
+  },
+  {
+    "id": "a2",
+    "name": "Code Reviewer",
+    "slug": "code-reviewer",
+    "status": "deployed",
+    "team": "engineering",
+    "department": "Engineering",
+    "isLead": true,
+    "subsystem": "cursor",
+    "sourceType": "prompt",
+    "version": "2.1.0",
+    "updatedAt": "2026-03-09T14:30:00Z",
+    "edges": [
+      {
+        "id": 3,
+        "direction": "consumes",
+        "type": "pubsub",
+        "config": { "topic": "github-events" }
+      },
+      {
+        "id": 4,
+        "direction": "publishes",
+        "type": "slack",
+        "config": { "channel": "#code-reviews" }
+      }
+    ]
+  },
+  {
+    "id": "a3",
+    "name": "Data Pipeline",
+    "slug": "data-pipeline",
+    "status": "stopped",
+    "team": "data",
+    "department": "Operations",
+    "isLead": false,
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "version": "0.5.2",
+    "updatedAt": "2026-03-08T11:15:00Z",
+    "edges": [
+      {
+        "id": 5,
+        "direction": "consumes",
+        "type": "cron",
+        "config": { "schedule": "0 */6 * * *", "timezone": "UTC" }
+      },
+      {
+        "id": 6,
+        "direction": "publishes",
+        "type": "gcs",
+        "config": { "prefix": "pipeline/" }
+      }
+    ]
+  },
+  {
+    "id": "a4",
+    "name": "Onboarding Bot",
+    "slug": "onboarding-bot",
+    "status": "draft",
+    "team": "hr",
+    "department": "Product",
+    "isLead": true,
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "version": "0.1.0",
+    "updatedAt": "2026-03-07T16:45:00Z",
+    "edges": [
+      {
+        "id": 7,
+        "direction": "consumes",
+        "type": "webhook",
+        "config": { "id": "wh-a4-in" }
+      },
+      {
+        "id": 8,
+        "direction": "publishes",
+        "type": "slack",
+        "config": { "channel": "#onboarding" }
+      }
+    ]
+  }
+]

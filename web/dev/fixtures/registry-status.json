@@ -1,0 +1,43 @@
+{
+  "tenantId": "local",
+  "email": "dev@local",
+  "isAdmin": true,
+  "public": {
+    "agents": [],
+    "tools": [
+      {
+        "id": "t1",
+        "name": "Cursor",
+        "slug": "cursor",
+        "visibility": "public",
+        "version": "0.0.1"
+      },
+      {
+        "id": "t2",
+        "name": "Claude",
+        "slug": "claude",
+        "visibility": "public",
+        "version": "0.0.1"
+      }
+    ],
+    "skills": [],
+    "rules": []
+  },
+  "private": {
+    "agents": [
+      {
+        "id": "a1",
+        "name": "Hello World",
+        "slug": "hello-world",
+        "visibility": "private",
+        "createdBy": "dev@local"
+      }
+    ],
+    "tools": [],
+    "skills": [],
+    "rules": []
+  },
+  "promotable": [
+    { "type": "agent", "slug": "hello-world", "name": "Hello World" }
+  ]
+}

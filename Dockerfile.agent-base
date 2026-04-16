@@ -1,0 +1,30 @@
+FROM node:22-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY sdk-agent-nodejs/bin/index.cjs /app/runtime/_runtime.cjs
+COPY default-registry/tools/ /tmp/tools/
+
+RUN for slug_dir in /tmp/tools/*/; do \
+      slug="$(basename $slug_dir)"; \
+      latest="$(ls -d ${slug_dir}*/ 2>/dev/null \
+        | xargs -I{} basename {} | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -V | tail -1)"; \
+      [ -z "$latest" ] && continue; \
+      version_dir="${slug_dir}${latest}/"; \
+      export TOOLS_DIR="/app/tools/$slug"; \
+      mkdir -p "$TOOLS_DIR"; \
+      cp "$version_dir/tool.json" "$TOOLS_DIR/" 2>/dev/null || true; \
+      if [ -f "$version_dir/install.sh" ]; then \
+        cp "$version_dir/install.sh" "$TOOLS_DIR/"; \
+        (cd "$TOOLS_DIR" && sh install.sh) || echo "WARN: $slug install failed"; \
+      else \
+        for f in "$version_dir"/tool "$version_dir"/tool.*; do \
+          [ -f "$f" ] && [ "$(basename $f)" != "tool.json" ] && \
+            cp "$f" "$TOOLS_DIR/" && chmod +x "$TOOLS_DIR/$(basename $f)"; \
+        done; \
+      fi; \
+    done && rm -rf /tmp/tools
+
+COPY sdk-agent-nodejs/agent-host.js /app/runtime/agent-host.js

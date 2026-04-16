@@ -1,0 +1,60 @@
+[
+  {
+    "id": "a2",
+    "name": "Company Summarizer",
+    "slug": "company-summarizer",
+    "status": "deployed",
+    "visibility": "public",
+    "team": "platform",
+    "department": "Engineering",
+    "isLead": true,
+    "subsystem": "claude",
+    "sourceType": "prompt",
+    "version": "1.2.0",
+    "updatedAt": "2026-03-10T08:00:00Z",
+    "createdBy": "admin@company.com",
+    "edges": [
+      {
+        "id": 1,
+        "direction": "consumes",
+        "type": "pubsub",
+        "config": { "topic": "documents" }
+      },
+      {
+        "id": 2,
+        "direction": "publishes",
+        "type": "slack",
+        "config": { "channel": "#summaries" }
+      }
+    ]
+  },
+  {
+    "id": "a3",
+    "name": "Code Reviewer",
+    "slug": "code-reviewer",
+    "status": "deployed",
+    "visibility": "public",
+    "team": "engineering",
+    "department": "Engineering",
+    "isLead": false,
+    "subsystem": "cursor",
+    "sourceType": "prompt",
+    "version": "2.1.0",
+    "updatedAt": "2026-03-09T14:30:00Z",
+    "createdBy": "admin@company.com",
+    "edges": [
+      {
+        "id": 3,
+        "direction": "consumes",
+        "type": "pubsub",
+        "config": { "topic": "github-events" }
+      },
+      {
+        "id": 4,
+        "direction": "publishes",
+        "type": "slack",
+        "config": { "channel": "#code-reviews" }
+      }
+    ]
+  }
+]

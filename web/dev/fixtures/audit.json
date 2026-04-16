@@ -1,0 +1,60 @@
+[
+  {
+    "id": 1,
+    "entityType": "agent",
+    "entityId": "hello-world",
+    "action": "deployed",
+    "actorId": "dev@local",
+    "metadata": {
+      "version": "1.0.0",
+      "environment": "production",
+      "revision": "ar-control-plane-00001"
+    },
+    "createdAt": "2026-03-10T09:00:00Z"
+  },
+  {
+    "id": 2,
+    "entityType": "tool",
+    "entityId": "cursor",
+    "action": "created",
+    "actorId": "dev@local",
+    "metadata": {
+      "version": "0.0.1",
+      "source": "registry"
+    },
+    "createdAt": "2026-03-09T14:30:00Z"
+  },
+  {
+    "id": 3,
+    "entityType": "agent",
+    "entityId": "code-reviewer",
+    "action": "updated",
+    "actorId": "admin@local",
+    "metadata": {
+      "fields": ["config", "version"],
+      "previousVersion": "2.0.0",
+      "newVersion": "2.1.0"
+    },
+    "createdAt": "2026-03-08T11:15:00Z"
+  },
+  {
+    "id": 4,
+    "entityType": "agent",
+    "entityId": "data-pipeline",
+    "action": "created",
+    "actorId": "dev@local",
+    "metadata": null,
+    "createdAt": "2026-03-07T08:45:00Z"
+  },
+  {
+    "id": 5,
+    "entityType": "skill",
+    "entityId": "summarize",
+    "action": "deployed",
+    "actorId": "admin@local",
+    "metadata": {
+      "version": "1.2.0"
+    },
+    "createdAt": "2026-03-06T16:20:00Z"
+  }
+]

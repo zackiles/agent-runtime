@@ -1,0 +1,12 @@
+{
+  "name": "Access Agent",
+  "slug": "access-agent",
+  "version": "0.0.1",
+  "entryPoint": "handler",
+  "sourceType": "function",
+  "subsystem": "cursor",
+  "template": true,
+  "secrets": [],
+  "triggers": [],
+  "description": "Default access configuration agent for apps, resources, and third-party services."
+}

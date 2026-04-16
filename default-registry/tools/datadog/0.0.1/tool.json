@@ -1,0 +1,11 @@
+{
+  "name": "datadog",
+  "slug": "datadog",
+  "version": "0.0.1",
+  "flags": [],
+  "env": {
+    "DD_API_KEY": "${DD_API_KEY}",
+    "DD_APP_KEY": "${DD_APP_KEY}",
+    "DD_SITE": "${DD_SITE}"
+  }
+}

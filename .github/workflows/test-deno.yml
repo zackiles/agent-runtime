@@ -1,0 +1,73 @@
+name: Test Deno
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Git
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Build web assets
+        working-directory: web
+        run: |
+          npm ci
+          npx vite build
+          echo "Web assets built"
+      - name: Lint and type check (sdk-client-deno)
+        working-directory: sdk-client-deno
+        run: |
+          echo "Checking sdk-client-deno..."
+          deno lint
+          deno check src/**/*.ts
+      - name: Lint and type check (control-plane)
+        working-directory: control-plane
+        run: |
+          echo "Checking control-plane..."
+          deno lint
+          deno check src/**/*.ts
+      - name: Lint and type check (cli)
+        working-directory: cli
+        run: |
+          echo "Running linting and type checking..."
+          deno task check
+          echo "Linting and type checking passed"
+      - name: Run tests
+        working-directory: cli
+        run: |
+          echo "Running tests..."
+          deno test -A --check test
+          echo "All tests passed"
+      - name: Summary
+        if: always()
+        run: |
+          echo "Test Summary"
+          echo "============"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.event_name }}"

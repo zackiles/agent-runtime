@@ -1,0 +1,7 @@
+[
+  { "id": "team-1", "name": "platform" },
+  { "id": "team-2", "name": "engineering" },
+  { "id": "team-3", "name": "data" },
+  { "id": "team-4", "name": "hr" },
+  { "id": "team-5", "name": "support" }
+]
