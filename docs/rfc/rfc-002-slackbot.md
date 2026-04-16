@@ -4,9 +4,11 @@
 
 > **Implementation note:** The bot was implemented as an in-process Deno module
 > inside the control plane (`control-plane/src/bots/slack/`), not as a separate
-> Cloud Run service as originally proposed. Cross-service authentication,
-> separate Dockerfiles, and the `bot-slack/` package described below do not
-> exist. See [docs/slack-bot.md](../slack-bot.md) for the current setup guide.
+> Cloud Run service as originally proposed. The `bot-slack/` package, its
+> folder structure, Dockerfile, CI workflow, `.gitignore` entry, and
+> cross-service authentication described below were never created. All
+> references to `bot-slack/` in this document are historical design artifacts.
+> See [docs/slack-bot.md](../slack-bot.md) for the current setup guide.
 
 ---
 
