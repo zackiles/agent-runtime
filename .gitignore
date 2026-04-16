@@ -21,3 +21,4 @@ secrets.json
 secrets.jsonc
 secrets.yml
 bot-slack/secrets/
+cli/docs/
