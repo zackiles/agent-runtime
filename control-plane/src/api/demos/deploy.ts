@@ -119,6 +119,54 @@ function runUrl(cfg: GcpConfig, ...segments: string[]): string {
 
 export type Visibility = 'public' | 'private'
 
+export type IamCondition = {
+  expression: string
+  title?: string
+  description?: string
+}
+
+export type IamBinding = {
+  role: string
+  members: string[]
+  condition?: IamCondition
+  [key: string]: unknown
+}
+
+const INVOKER_ROLE = 'roles/run.invoker'
+const PUBLIC_MEMBER = 'allUsers'
+
+const isUnconditionalInvoker = (b: IamBinding): boolean =>
+  b.role === INVOKER_ROLE && !b.condition
+
+export function nextDemoBindings(
+  visibility: Visibility,
+  existing: readonly IamBinding[],
+): IamBinding[] {
+  const result: IamBinding[] = []
+  let touchedInvoker = false
+  for (const b of existing) {
+    if (!isUnconditionalInvoker(b)) {
+      result.push(b)
+      continue
+    }
+    touchedInvoker = true
+    const members = b.members || []
+    if (visibility === 'private') {
+      const next = members.filter((m) => m !== PUBLIC_MEMBER)
+      if (next.length > 0) result.push({ ...b, members: next })
+      continue
+    }
+    const next = members.includes(PUBLIC_MEMBER)
+      ? members
+      : [...members, PUBLIC_MEMBER]
+    result.push({ ...b, members: next })
+  }
+  if (visibility === 'public' && !touchedInvoker) {
+    result.push({ role: INVOKER_ROLE, members: [PUBLIC_MEMBER] })
+  }
+  return result
+}
+
 async function setServiceAccess(
   cfg: GcpConfig,
   svc: string,
@@ -130,10 +178,6 @@ async function setServiceAccess(
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
   }
-
-  const role = 'roles/run.invoker'
-  const member = 'allUsers'
-  void visibility
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
@@ -153,24 +197,24 @@ async function setServiceAccess(
     }
 
     const existing = await policyRes.json() as {
-      bindings?: Array<{ role: string; members: string[] }>
+      bindings?: IamBinding[]
       etag?: string
     }
-
-    const hasBinding = (existing.bindings || []).some((b) =>
-      b.role === role && b.members?.includes(member)
+    const current = existing.bindings || []
+    const hasPublic = current.some((b) =>
+      isUnconditionalInvoker(b) && b.members?.includes(PUBLIC_MEMBER)
     )
-    if (hasBinding) return
-
-    const bindings = (existing.bindings || [])
-      .filter((b) => b.role !== role)
-    bindings.push({ role, members: [member] })
+    if (visibility === 'public' && hasPublic) return
+    if (visibility === 'private' && !hasPublic) return
 
     const setRes = await fetch(`${svcResource}:setIamPolicy`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        policy: { bindings, etag: existing.etag },
+        policy: {
+          bindings: nextDemoBindings(visibility, current),
+          etag: existing.etag,
+        },
       }),
     })
 
@@ -183,7 +227,10 @@ async function setServiceAccess(
     })
   }
 
-  logger.error('Failed to set public access after retries', { service: svc })
+  logger.error('Failed to set service access after retries', {
+    service: svc,
+    visibility,
+  })
 }
 
 let demoRepoCreated = false
