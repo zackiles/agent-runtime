@@ -119,28 +119,52 @@ function runUrl(cfg: GcpConfig, ...segments: string[]): string {
 
 export type Visibility = 'public' | 'private'
 
-export type IamBinding = { role: string; members: string[] }
+export type IamCondition = {
+  expression: string
+  title?: string
+  description?: string
+}
+
+export type IamBinding = {
+  role: string
+  members: string[]
+  condition?: IamCondition
+  [key: string]: unknown
+}
 
 const INVOKER_ROLE = 'roles/run.invoker'
 const PUBLIC_MEMBER = 'allUsers'
+
+const isUnconditionalInvoker = (b: IamBinding): boolean =>
+  b.role === INVOKER_ROLE && !b.condition
 
 export function nextDemoBindings(
   visibility: Visibility,
   existing: readonly IamBinding[],
 ): IamBinding[] {
-  const stripped = existing
-    .map((b) => ({
-      role: b.role,
-      members: (b.members || []).filter((m) =>
-        !(b.role === INVOKER_ROLE && m === PUBLIC_MEMBER)
-      ),
-    }))
-    .filter((b) => b.members.length > 0)
-  if (visibility === 'private') return stripped
-  const invoker = stripped.find((b) => b.role === INVOKER_ROLE)
-  if (invoker) invoker.members.push(PUBLIC_MEMBER)
-  else stripped.push({ role: INVOKER_ROLE, members: [PUBLIC_MEMBER] })
-  return stripped
+  const result: IamBinding[] = []
+  let touchedInvoker = false
+  for (const b of existing) {
+    if (!isUnconditionalInvoker(b)) {
+      result.push(b)
+      continue
+    }
+    touchedInvoker = true
+    const members = b.members || []
+    if (visibility === 'private') {
+      const next = members.filter((m) => m !== PUBLIC_MEMBER)
+      if (next.length > 0) result.push({ ...b, members: next })
+      continue
+    }
+    const next = members.includes(PUBLIC_MEMBER)
+      ? members
+      : [...members, PUBLIC_MEMBER]
+    result.push({ ...b, members: next })
+  }
+  if (visibility === 'public' && !touchedInvoker) {
+    result.push({ role: INVOKER_ROLE, members: [PUBLIC_MEMBER] })
+  }
+  return result
 }
 
 async function setServiceAccess(
@@ -178,7 +202,7 @@ async function setServiceAccess(
     }
     const current = existing.bindings || []
     const hasPublic = current.some((b) =>
-      b.role === INVOKER_ROLE && b.members?.includes(PUBLIC_MEMBER)
+      isUnconditionalInvoker(b) && b.members?.includes(PUBLIC_MEMBER)
     )
     if (visibility === 'public' && hasPublic) return
     if (visibility === 'private' && !hasPublic) return
