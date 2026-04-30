@@ -119,6 +119,30 @@ function runUrl(cfg: GcpConfig, ...segments: string[]): string {
 
 export type Visibility = 'public' | 'private'
 
+export type IamBinding = { role: string; members: string[] }
+
+const INVOKER_ROLE = 'roles/run.invoker'
+const PUBLIC_MEMBER = 'allUsers'
+
+export function nextDemoBindings(
+  visibility: Visibility,
+  existing: readonly IamBinding[],
+): IamBinding[] {
+  const stripped = existing
+    .map((b) => ({
+      role: b.role,
+      members: (b.members || []).filter((m) =>
+        !(b.role === INVOKER_ROLE && m === PUBLIC_MEMBER)
+      ),
+    }))
+    .filter((b) => b.members.length > 0)
+  if (visibility === 'private') return stripped
+  const invoker = stripped.find((b) => b.role === INVOKER_ROLE)
+  if (invoker) invoker.members.push(PUBLIC_MEMBER)
+  else stripped.push({ role: INVOKER_ROLE, members: [PUBLIC_MEMBER] })
+  return stripped
+}
+
 async function setServiceAccess(
   cfg: GcpConfig,
   svc: string,
@@ -130,10 +154,6 @@ async function setServiceAccess(
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
   }
-
-  const role = 'roles/run.invoker'
-  const member = 'allUsers'
-  void visibility
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
@@ -153,24 +173,24 @@ async function setServiceAccess(
     }
 
     const existing = await policyRes.json() as {
-      bindings?: Array<{ role: string; members: string[] }>
+      bindings?: IamBinding[]
       etag?: string
     }
-
-    const hasBinding = (existing.bindings || []).some((b) =>
-      b.role === role && b.members?.includes(member)
+    const current = existing.bindings || []
+    const hasPublic = current.some((b) =>
+      b.role === INVOKER_ROLE && b.members?.includes(PUBLIC_MEMBER)
     )
-    if (hasBinding) return
-
-    const bindings = (existing.bindings || [])
-      .filter((b) => b.role !== role)
-    bindings.push({ role, members: [member] })
+    if (visibility === 'public' && hasPublic) return
+    if (visibility === 'private' && !hasPublic) return
 
     const setRes = await fetch(`${svcResource}:setIamPolicy`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        policy: { bindings, etag: existing.etag },
+        policy: {
+          bindings: nextDemoBindings(visibility, current),
+          etag: existing.etag,
+        },
       }),
     })
 
@@ -183,7 +203,10 @@ async function setServiceAccess(
     })
   }
 
-  logger.error('Failed to set public access after retries', { service: svc })
+  logger.error('Failed to set service access after retries', {
+    service: svc,
+    visibility,
+  })
 }
 
 let demoRepoCreated = false

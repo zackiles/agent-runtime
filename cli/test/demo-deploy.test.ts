@@ -1,7 +1,11 @@
 import { assertEquals, assertStringIncludes } from '@std/assert'
-import { join } from '@std/path'
+import { join, toFileUrl } from '@std/path'
 
 const ROOT = join(Deno.cwd(), '..')
+
+const deployModule = await import(
+  toFileUrl(join(ROOT, 'control-plane/src/api/demos/deploy.ts')).href
+) as typeof import('../../control-plane/src/api/demos/deploy.ts')
 
 Deno.test('deploy.ts includes userId in serviceName', async () => {
   const deploy = await Deno.readTextFile(
@@ -112,4 +116,84 @@ Deno.test('routes.ts imports deleteImage', async () => {
   )
 
   assertStringIncludes(routes, 'deleteImage')
+})
+
+Deno.test('private demos are not bound to allUsers', () => {
+  const next = deployModule.nextDemoBindings('private', [
+    { role: 'roles/run.invoker', members: ['allUsers'] },
+    { role: 'roles/run.viewer', members: ['user:owner@example.com'] },
+  ])
+
+  assertEquals(
+    next.some((b) =>
+      b.role === 'roles/run.invoker' && b.members.includes('allUsers')
+    ),
+    false,
+    'private demos must strip allUsers from roles/run.invoker',
+  )
+  assertEquals(
+    next.find((b) => b.role === 'roles/run.viewer')?.members,
+    ['user:owner@example.com'],
+    'unrelated role bindings must be preserved',
+  )
+})
+
+Deno.test('private demos preserve other invokers', () => {
+  const next = deployModule.nextDemoBindings('private', [
+    {
+      role: 'roles/run.invoker',
+      members: [
+        'allUsers',
+        'serviceAccount:bot@example.iam.gserviceaccount.com',
+      ],
+    },
+  ])
+
+  const invoker = next.find((b) => b.role === 'roles/run.invoker')
+  assertEquals(
+    invoker?.members,
+    ['serviceAccount:bot@example.iam.gserviceaccount.com'],
+    'private mode must keep non-public invokers (e.g. control plane SA)',
+  )
+})
+
+Deno.test('public demos add allUsers to invoker', () => {
+  const next = deployModule.nextDemoBindings('public', [
+    {
+      role: 'roles/run.invoker',
+      members: ['serviceAccount:bot@example.iam.gserviceaccount.com'],
+    },
+  ])
+
+  const invoker = next.find((b) => b.role === 'roles/run.invoker')
+  assertEquals(
+    invoker?.members.includes('allUsers'),
+    true,
+    'public mode must include allUsers',
+  )
+  assertEquals(
+    invoker?.members.includes(
+      'serviceAccount:bot@example.iam.gserviceaccount.com',
+    ),
+    true,
+    'public mode must keep existing invoker members',
+  )
+})
+
+Deno.test('public demos seed a binding when none exists', () => {
+  const next = deployModule.nextDemoBindings('public', [])
+  assertEquals(next, [{ role: 'roles/run.invoker', members: ['allUsers'] }])
+})
+
+Deno.test('setServiceAccess honors visibility (no orphaned void)', async () => {
+  const deploy = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/api/demos/deploy.ts'),
+  )
+
+  assertEquals(
+    deploy.includes('void visibility'),
+    false,
+    'deploy.ts must not discard the visibility argument',
+  )
+  assertStringIncludes(deploy, 'nextDemoBindings(visibility')
 })
