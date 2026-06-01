@@ -2,6 +2,7 @@ import { Hono } from '@hono/hono'
 import { context } from '../types.ts'
 import type { Env } from '../types.ts'
 import { webAuth } from '../middleware/auth.ts'
+import { handle as proxyDemo } from './demos/proxy.ts'
 import { load as loadRuntime } from '@ar/client/runtime'
 
 let web: Awaited<ReturnType<typeof loadWeb>> | null = null
@@ -28,6 +29,9 @@ app.get('/agents', (c) => c.redirect('/web/registry'))
 app.get('/agents/*', (c) => c.redirect('/web/registry'))
 app.get('/copy', (c) => c.redirect('/web/registry'))
 app.get('/copy/*', (c) => c.redirect('/web/registry'))
+
+app.all('/d/:name', webAuth, proxyDemo)
+app.all('/d/:name/*', webAuth, proxyDemo)
 
 app.get('/*', webAuth, async (c) => {
   const w = await getWeb()
