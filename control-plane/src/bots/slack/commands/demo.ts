@@ -3,6 +3,7 @@ import type { Action } from 'npm:@slack/types@2'
 import { loadMeta, slugify, storeMeta } from '@ar/client/operations/demos'
 import type { DemoMeta } from '@ar/client/operations/demos'
 import {
+  demoAccessUrl,
   deployContainer,
   destroyContainer,
   findDemoAgent,
@@ -92,16 +93,19 @@ function statusIcon(status?: string): string {
   return STATUS_ICONS[status || 'created'] || ':white_circle:'
 }
 
-function webDemosUrl(): string {
-  const cpUrl = Deno.env.get('AR_AUDIENCE') ||
+function cpBase(): string {
+  return Deno.env.get('AR_AUDIENCE') ||
     Deno.env.get('AR_CONTROL_PLANE_URL') || ''
-  return cpUrl ? `${cpUrl}/web/demos` : ''
+}
+
+function webDemosUrl(): string {
+  const base = cpBase()
+  return base ? `${base}/web/demos` : ''
 }
 
 function archiveUrl(name: string): string {
-  const cpUrl = Deno.env.get('AR_AUDIENCE') ||
-    Deno.env.get('AR_CONTROL_PLANE_URL') || ''
-  return cpUrl ? `${cpUrl}/api/demos/${name}/archive` : ''
+  const base = cpBase()
+  return base ? `${base}/api/demos/${name}/archive` : ''
 }
 
 function resultButtons(meta: DemoMeta): Action[] {
@@ -110,7 +114,7 @@ function resultButtons(meta: DemoMeta): Action[] {
     buttons.push({
       type: 'button',
       text: { type: 'plain_text', text: 'View' },
-      url: meta.url,
+      url: demoAccessUrl(meta, cpBase()),
       style: 'primary',
     } as unknown as Action)
   }
@@ -170,7 +174,7 @@ function demoResultCard(title: string, meta: DemoMeta) {
     `*Visibility:* ${vis}`,
   ]
   if (meta.url && meta.status === 'running') {
-    lines.push(`*URL:* <${meta.url}>`)
+    lines.push(`*URL:* <${demoAccessUrl(meta, cpBase())}>`)
   }
   if (meta.summary) lines.push(`*Summary:* ${meta.summary}`)
   const web = webDemosUrl()
@@ -191,7 +195,7 @@ function demoCard(title: string, meta: DemoMeta) {
     `*Visibility:* ${vis}`,
   ]
   if (meta.url && meta.status === 'running') {
-    lines.push(`*URL:* <${meta.url}>`)
+    lines.push(`*URL:* <${demoAccessUrl(meta, cpBase())}>`)
   }
   if (meta.summary) lines.push(`*Summary:* ${meta.summary}`)
   const web = webDemosUrl()

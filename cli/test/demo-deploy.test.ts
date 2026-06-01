@@ -250,6 +250,81 @@ Deno.test('non-invoker binding fields are preserved', () => {
   )
 })
 
+const PROXY_SA = 'serviceAccount:cp@nesto.iam.gserviceaccount.com'
+
+Deno.test('private demos grant the control-plane SA invoker, not allUsers', () => {
+  const next = deployModule.nextDemoBindings(
+    'private',
+    [{ role: 'roles/run.invoker', members: ['allUsers'] }],
+    PROXY_SA,
+  )
+  const invoker = next.find((b) => b.role === 'roles/run.invoker')
+  assertEquals(
+    invoker?.members.includes('allUsers'),
+    false,
+    'private demos must not be bound to allUsers',
+  )
+  assertEquals(
+    invoker?.members.includes(PROXY_SA),
+    true,
+    'private demos must let the control-plane SA invoke (for the proxy)',
+  )
+})
+
+Deno.test('private demos seed an invoker binding for the proxy SA', () => {
+  const next = deployModule.nextDemoBindings('private', [], PROXY_SA)
+  assertEquals(next, [{ role: 'roles/run.invoker', members: [PROXY_SA] }])
+})
+
+Deno.test('public demos keep allUsers and the proxy SA', () => {
+  const next = deployModule.nextDemoBindings('public', [], PROXY_SA)
+  const invoker = next.find((b) => b.role === 'roles/run.invoker')
+  assertEquals(invoker?.members.includes('allUsers'), true)
+  assertEquals(invoker?.members.includes(PROXY_SA), true)
+})
+
+Deno.test('proxy SA is not duplicated when already present', () => {
+  const next = deployModule.nextDemoBindings(
+    'private',
+    [{ role: 'roles/run.invoker', members: [PROXY_SA] }],
+    PROXY_SA,
+  )
+  const invoker = next.find((b) => b.role === 'roles/run.invoker')
+  assertEquals(
+    invoker?.members.filter((m) => m === PROXY_SA).length,
+    1,
+    'proxy SA must appear exactly once',
+  )
+})
+
+Deno.test('demoAccessUrl routes private demos through the control plane', () => {
+  const priv = deployModule.demoAccessUrl(
+    { name: 'my-demo', url: 'https://demo-x.run.app', visibility: 'private' },
+    'https://cp.example.com/',
+  )
+  assertEquals(priv, 'https://cp.example.com/web/d/my-demo')
+
+  const pub = deployModule.demoAccessUrl(
+    { name: 'my-demo', url: 'https://demo-x.run.app', visibility: 'public' },
+    'https://cp.example.com',
+  )
+  assertEquals(
+    pub,
+    'https://demo-x.run.app',
+    'public demos link directly to the Cloud Run URL',
+  )
+
+  const noBase = deployModule.demoAccessUrl(
+    { name: 'my-demo', url: 'https://demo-x.run.app', visibility: 'private' },
+    '',
+  )
+  assertEquals(
+    noBase,
+    'https://demo-x.run.app',
+    'falls back to the raw URL when no control-plane base is configured',
+  )
+})
+
 Deno.test('setServiceAccess honors visibility (no orphaned void)', async () => {
   const deploy = await Deno.readTextFile(
     join(ROOT, 'control-plane/src/api/demos/deploy.ts'),

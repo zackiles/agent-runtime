@@ -520,6 +520,7 @@ function DemoCard({
 }) {
   const status = demo.status || 'created'
   const vis = demo.visibility || 'private'
+  const accessUrl = vis === 'private' ? `/web/d/${demo.name}` : demo.url
 
   const statusColor = status === 'running'
     ? 'bg-green-50 text-green-700'
@@ -632,12 +633,12 @@ function DemoCard({
                 <dt class='text-gray-500 text-xs'>URL</dt>
                 <dd class='text-gray-900 mt-0.5'>
                   <a
-                    href={demo.url}
+                    href={accessUrl}
                     target='_blank'
                     rel='noopener noreferrer'
                     class='text-blue-600 hover:underline text-xs break-all'
                   >
-                    {demo.url}
+                    {accessUrl}
                   </a>
                 </dd>
               </div>
@@ -689,12 +690,12 @@ function DemoCard({
             )}
             {status === 'running' && demo.url && (
               <a
-                href={demo.url}
+                href={accessUrl}
                 target='_blank'
                 rel='noopener noreferrer'
                 onClick={(e) => {
                   try {
-                    new URL(demo.url)
+                    new URL(accessUrl, globalThis.location.origin)
                   } catch {
                     e.preventDefault()
                   }
