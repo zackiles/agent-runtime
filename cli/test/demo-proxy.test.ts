@@ -90,6 +90,24 @@ Deno.test('proxy rewrites root-relative asset URLs and injects a base href', asy
   assertStringIncludes(proxy, 'rewriteHtml(')
 })
 
+Deno.test('referer fallback routes root-absolute demo assets back to the proxy', async () => {
+  const proxy = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
+  )
+  // Absolute-path requests made by demo JavaScript (e.g. fetch('/data.json'))
+  // bypass the <base href> and 404 on the control plane root; the referer
+  // fallback must recover the demo slug and re-proxy through forward().
+  assertStringIncludes(proxy, 'async function referred(')
+  assertStringIncludes(proxy, "c.req.header('referer')")
+  assertStringIncludes(proxy, '/^\\/web\\/d\\/([^/?#]+)/')
+  assertStringIncludes(proxy, 'webAuth(c, async ()')
+
+  const mod = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/mod.ts'),
+  )
+  assertStringIncludes(mod, "app.all('*', proxyReferred)")
+})
+
 Deno.test('slack and web link private demos through the proxy', async () => {
   const demo = await Deno.readTextFile(
     join(ROOT, 'control-plane/src/bots/slack/commands/demo.ts'),

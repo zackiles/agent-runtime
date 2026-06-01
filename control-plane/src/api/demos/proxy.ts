@@ -1,6 +1,7 @@
 import type { Context } from '@hono/hono'
 import type { Env } from '../../types.ts'
 import { context } from '../../types.ts'
+import { webAuth } from '../../middleware/auth.ts'
 import { listDemos, loadMeta, slugify } from '@ar/client/operations/demos'
 import type { DemoMeta } from '@ar/client/operations/demos'
 import platform from '@ar/client/platform'
@@ -71,23 +72,15 @@ function notFound(name: string): Response {
   )
 }
 
-async function handle(c: Context<Env>): Promise<Response> {
-  const { tenantId, email, isAdmin } = context(c)
-  const { project } = gcpConfig()
-  const name = slugify(c.req.param('name') || '')
-
-  const meta = await resolveDemo(project, tenantId, email, isAdmin, name)
-  if (!meta || !meta.url || meta.status !== 'running') return notFound(name)
-
-  // Public demos are bound to allUsers and reachable directly.
-  if (meta.visibility !== 'private') return c.redirect(meta.url, 302)
-
-  const target = new URL(meta.url)
+async function forward(
+  c: Context<Env>,
+  meta: DemoMeta,
+  name: string,
+  rest: string,
+): Promise<Response> {
+  const target = new URL(meta.url!)
   const reqUrl = new URL(c.req.url)
   const prefix = `/web/d/${name}`
-  // The control plane strips trailing slashes globally, so the proxy root has
-  // no trailing slash; the injected `<base href>` handles relative resolution.
-  const rest = reqUrl.pathname.slice(prefix.length) || '/'
 
   let token: string
   try {
@@ -144,4 +137,61 @@ async function handle(c: Context<Env>): Promise<Response> {
   return new Response(upstream.body, { status: upstream.status, headers: out })
 }
 
-export { handle }
+async function handle(c: Context<Env>): Promise<Response> {
+  const { tenantId, email, isAdmin } = context(c)
+  const { project } = gcpConfig()
+  const name = slugify(c.req.param('name') || '')
+
+  const meta = await resolveDemo(project, tenantId, email, isAdmin, name)
+  if (!meta || !meta.url || meta.status !== 'running') return notFound(name)
+
+  // Public demos are bound to allUsers and reachable directly.
+  if (meta.visibility !== 'private') return c.redirect(meta.url, 302)
+
+  const prefix = `/web/d/${name}`
+  const reqUrl = new URL(c.req.url)
+  // The control plane strips trailing slashes globally, so the proxy root has
+  // no trailing slash; the injected `<base href>` handles relative resolution.
+  const rest = reqUrl.pathname.slice(prefix.length) || '/'
+  return forward(c, meta, name, rest)
+}
+
+// A proxied demo runs under the `/web/d/<slug>` prefix, but JavaScript inside
+// the demo (e.g. `fetch('/data/products.json')`) issues root-absolute requests
+// that bypass the injected `<base href>` and the HTML attribute rewriting, so
+// they land on the control plane root and 404. When such an unmatched request
+// carries a `Referer` pointing at a proxied demo, route it back to that demo.
+async function referred(c: Context<Env>): Promise<Response> {
+  let name = ''
+  try {
+    const ref = c.req.header('referer') || ''
+    name = slugify(
+      new URL(ref).pathname.match(/^\/web\/d\/([^/?#]+)/)?.[1] || '',
+    )
+  } catch {
+    name = ''
+  }
+  if (!name) return c.notFound()
+
+  let proxied: Response | undefined
+  const denied = await webAuth(c, async () => {
+    const { tenantId, email, isAdmin } = context(c)
+    const { project } = gcpConfig()
+    const meta = await resolveDemo(project, tenantId, email, isAdmin, name)
+    if (!meta || !meta.url || meta.status !== 'running') {
+      proxied = await c.notFound()
+      return
+    }
+
+    const reqUrl = new URL(c.req.url)
+    if (meta.visibility !== 'private') {
+      const base = meta.url.replace(/\/+$/, '')
+      proxied = c.redirect(`${base}${reqUrl.pathname}${reqUrl.search}`, 302)
+      return
+    }
+    proxied = await forward(c, meta, name, reqUrl.pathname)
+  })
+  return denied ?? proxied ?? c.notFound()
+}
+
+export { handle, referred }

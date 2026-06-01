@@ -12,6 +12,7 @@ import { resolveTenant } from './middleware/tenant.ts'
 import { auditMiddleware } from './middleware/audit.ts'
 import authApi from './api/auth.ts'
 import webApp from './api/web.ts'
+import { referred as proxyReferred } from './api/demos/proxy.ts'
 import agentsApi from './api/agents.ts'
 import configsApi from './api/configs.ts'
 import teamsApi from './api/teams.ts'
@@ -187,6 +188,8 @@ app.post('/api/user/tenant', async (c) => {
     },
   })
 })
+
+app.all('*', proxyReferred)
 
 async function start(
   port = loadRuntime().controlPlane.port,
