@@ -85,13 +85,9 @@ async function handle(c: Context<Env>): Promise<Response> {
   const target = new URL(meta.url)
   const reqUrl = new URL(c.req.url)
   const prefix = `/web/d/${name}`
-  const rest = reqUrl.pathname.slice(prefix.length)
-
-  // A trailing slash makes the demo's relative asset URLs resolve under the
-  // proxy root rather than against /web/.
-  if (rest === '') {
-    return c.redirect(`${prefix}/${reqUrl.search}`, 302)
-  }
+  // The control plane strips trailing slashes globally, so the proxy root has
+  // no trailing slash; the injected `<base href>` handles relative resolution.
+  const rest = reqUrl.pathname.slice(prefix.length) || '/'
 
   let token: string
   try {

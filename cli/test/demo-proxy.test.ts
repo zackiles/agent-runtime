@@ -55,6 +55,18 @@ Deno.test('root-relative redirect Locations stay inside the proxy path', async (
   )
 })
 
+Deno.test('proxy does not add a trailing slash (global stripper would loop)', async () => {
+  const proxy = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
+  )
+  assertEquals(
+    /redirect\(`\$\{prefix\}\/\$\{reqUrl\.search\}`/.test(proxy),
+    false,
+    'proxy must not self-redirect to a trailing-slash root',
+  )
+  assertStringIncludes(proxy, "reqUrl.pathname.slice(prefix.length) || '/'")
+})
+
 Deno.test('proxy never forwards the platform session cookie upstream', async () => {
   const proxy = await Deno.readTextFile(
     join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
