@@ -22,12 +22,33 @@ async function resolveDemo(
   project: string,
   tenantId: string,
   email: string,
+  isAdmin: boolean,
   name: string,
 ): Promise<DemoMeta | null> {
   const own = await loadMeta(project, tenantId, email, name)
   if (own) return own
+  // A private demo belongs to its creator; only admins may reach another
+  // user's demo. Without this guard any tenant member could invoke a
+  // private Cloud Run service just by knowing the slug.
+  if (!isAdmin) return null
   const all = await listDemos(project, tenantId)
   return all.find((d) => d.name === name) ?? null
+}
+
+function rewriteLocation(
+  location: string,
+  origin: string,
+  prefix: string,
+): string {
+  if (location.startsWith(origin)) {
+    return prefix + location.slice(origin.length)
+  }
+  // Root-relative redirects (e.g. `Location: /login`) would otherwise send
+  // the browser to the control-plane host, escaping the proxied demo.
+  if (location.startsWith('/') && !location.startsWith('//')) {
+    return prefix + location
+  }
+  return location
 }
 
 function rewriteHtml(html: string, prefix: string): string {
@@ -51,11 +72,11 @@ function notFound(name: string): Response {
 }
 
 async function handle(c: Context<Env>): Promise<Response> {
-  const { tenantId, email } = context(c)
+  const { tenantId, email, isAdmin } = context(c)
   const { project } = gcpConfig()
   const name = slugify(c.req.param('name') || '')
 
-  const meta = await resolveDemo(project, tenantId, email, name)
+  const meta = await resolveDemo(project, tenantId, email, isAdmin, name)
   if (!meta || !meta.url || meta.status !== 'running') return notFound(name)
 
   // Public demos are bound to allUsers and reachable directly.
@@ -110,12 +131,7 @@ async function handle(c: Context<Env>): Promise<Response> {
     const lk = k.toLowerCase()
     if (HOP_BY_HOP.has(lk)) continue
     if (lk === 'location') {
-      out.set(
-        k,
-        v.startsWith(target.origin)
-          ? prefix + v.slice(target.origin.length)
-          : v,
-      )
+      out.set(k, rewriteLocation(v, target.origin, prefix))
       continue
     }
     // Rewritten HTML is decoded and re-sized, so drop stale framing headers.

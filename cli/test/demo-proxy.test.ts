@@ -28,6 +28,33 @@ Deno.test('proxy mints an identity token and gates on the session', async () => 
   assertStringIncludes(proxy, 'resolveDemo(')
 })
 
+Deno.test('cross-user private demo lookup is restricted to admins', async () => {
+  const proxy = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
+  )
+  // A non-admin must only resolve their own demo; the tenant-wide
+  // listDemos fallback must be gated behind an admin check.
+  assertStringIncludes(proxy, 'if (!isAdmin) return null')
+  const guardIdx = proxy.indexOf('if (!isAdmin) return null')
+  const listIdx = proxy.indexOf('listDemos(')
+  assertEquals(
+    guardIdx > -1 && listIdx > -1 && guardIdx < listIdx,
+    true,
+    'admin guard must precede the tenant-wide listDemos fallback',
+  )
+})
+
+Deno.test('root-relative redirect Locations stay inside the proxy path', async () => {
+  const proxy = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
+  )
+  assertStringIncludes(proxy, 'function rewriteLocation(')
+  assertStringIncludes(
+    proxy,
+    "location.startsWith('/') && !location.startsWith('//')",
+  )
+})
+
 Deno.test('proxy never forwards the platform session cookie upstream', async () => {
   const proxy = await Deno.readTextFile(
     join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
