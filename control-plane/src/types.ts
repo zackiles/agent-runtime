@@ -5,6 +5,7 @@ type Env = {
     user: { id: string; name: string; isAdmin: boolean; createdAt: string }
     email: string
     tenantId: string
+    telemetryClient: { id: string; name: string }
   }
 }
 

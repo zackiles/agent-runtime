@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '../api.ts'
+import { TelemetryClients } from './telemetry-clients.tsx'
 
 type TelemetryEvent = {
   id: string
@@ -20,7 +21,7 @@ type TelemetryEvent = {
   createdAt: string
 }
 
-type Tab = 'events' | 'trace'
+type Tab = 'events' | 'trace' | 'clients'
 type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d'
 
 const TIME_RANGES: { value: TimeRange; label: string; ms: number }[] = [
@@ -170,112 +171,136 @@ export function Telemetry() {
   return (
     <div class='space-y-4'>
       <div class='flex items-center justify-between'>
-        <div class='flex items-center gap-2'>
+        <div class='flex items-center gap-4'>
           <h2 class='text-lg font-semibold'>Telemetry</h2>
+          <nav class='flex items-center gap-1'>
+            {(['events', 'clients'] as const).map((t) => (
+              <button
+                key={t}
+                type='button'
+                onClick={() => setTab(t)}
+                class={`px-2.5 py-1 text-xs rounded-md capitalize transition-colors ${
+                  tab === t || (t === 'events' && tab === 'trace')
+                    ? 'bg-gray-100 text-gray-900 font-medium'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </nav>
         </div>
-        <div class='flex items-center gap-2'>
-          {TIME_RANGES.map((r) => (
-            <button
-              key={r.value}
-              type='button'
-              onClick={() => setRange(r.value)}
-              class={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                range === r.value
-                  ? 'bg-gray-900 text-white'
-                  : 'text-gray-500 hover:bg-gray-100'
+        {tab !== 'clients' && (
+          <div class='flex items-center gap-2'>
+            {TIME_RANGES.map((r) => (
+              <button
+                key={r.value}
+                type='button'
+                onClick={() => setRange(r.value)}
+                class={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  range === r.value
+                    ? 'bg-gray-900 text-white'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {tab === 'clients' && <TelemetryClients />}
+
+      {tab !== 'clients' && (
+        <div class='grid grid-cols-2 sm:grid-cols-4 gap-3'>
+          <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
+            <p class='text-2xl font-bold text-gray-900'>
+              {events.length}
+            </p>
+            <p class='text-xs text-gray-500'>Events</p>
+          </div>
+          <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
+            <p class='text-2xl font-bold text-gray-900'>
+              {traceCount}
+            </p>
+            <p class='text-xs text-gray-500'>Traces</p>
+          </div>
+          <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
+            <p
+              class={`text-2xl font-bold ${
+                errorCount > 0 ? 'text-red-600' : 'text-gray-900'
               }`}
             >
-              {r.label}
+              {errorCount}
+            </p>
+            <p class='text-xs text-gray-500'>Errors</p>
+          </div>
+          <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
+            <p
+              class={`text-2xl font-bold ${
+                warnCount > 0 ? 'text-amber-600' : 'text-gray-900'
+              }`}
+            >
+              {warnCount}
+            </p>
+            <p class='text-xs text-gray-500'>Warnings</p>
+          </div>
+        </div>
+      )}
+
+      {tab !== 'clients' && (
+        <div class='flex items-center gap-3 flex-wrap'>
+          <input
+            type='text'
+            placeholder='Search actions, actors, traces, payloads, tags...'
+            value={search}
+            onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
+            class='px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1 min-w-[200px] max-w-md'
+          />
+          <select
+            value={levelFilter}
+            onChange={(e) =>
+              setLevelFilter(
+                (e.target as HTMLSelectElement).value,
+              )}
+            class='px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
+          >
+            <option value=''>All Levels</option>
+            <option value='error'>Error</option>
+            <option value='warn'>Warn</option>
+            <option value='info'>Info</option>
+            <option value='debug'>Debug</option>
+          </select>
+          <select
+            value={clientFilter}
+            onChange={(e) =>
+              setClientFilter(
+                (e.target as HTMLSelectElement).value,
+              )}
+            class='px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
+          >
+            <option value=''>All Clients</option>
+            {clients.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          {traceId && (
+            <button
+              type='button'
+              onClick={clearTrace}
+              class='px-3 py-2 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors'
+            >
+              Trace: {traceId.slice(0, 12)}... &times;
             </button>
-          ))}
-        </div>
-      </div>
-
-      <div class='grid grid-cols-2 sm:grid-cols-4 gap-3'>
-        <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
-          <p class='text-2xl font-bold text-gray-900'>
-            {events.length}
-          </p>
-          <p class='text-xs text-gray-500'>Events</p>
-        </div>
-        <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
-          <p class='text-2xl font-bold text-gray-900'>
-            {traceCount}
-          </p>
-          <p class='text-xs text-gray-500'>Traces</p>
-        </div>
-        <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
-          <p
-            class={`text-2xl font-bold ${
-              errorCount > 0 ? 'text-red-600' : 'text-gray-900'
-            }`}
-          >
-            {errorCount}
-          </p>
-          <p class='text-xs text-gray-500'>Errors</p>
-        </div>
-        <div class='bg-white border border-gray-200 rounded-lg px-4 py-3'>
-          <p
-            class={`text-2xl font-bold ${
-              warnCount > 0 ? 'text-amber-600' : 'text-gray-900'
-            }`}
-          >
-            {warnCount}
-          </p>
-          <p class='text-xs text-gray-500'>Warnings</p>
-        </div>
-      </div>
-
-      <div class='flex items-center gap-3 flex-wrap'>
-        <input
-          type='text'
-          placeholder='Search actions, actors, traces, payloads, tags...'
-          value={search}
-          onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
-          class='px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1 min-w-[200px] max-w-md'
-        />
-        <select
-          value={levelFilter}
-          onChange={(e) =>
-            setLevelFilter(
-              (e.target as HTMLSelectElement).value,
-            )}
-          class='px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
-        >
-          <option value=''>All Levels</option>
-          <option value='error'>Error</option>
-          <option value='warn'>Warn</option>
-          <option value='info'>Info</option>
-          <option value='debug'>Debug</option>
-        </select>
-        <select
-          value={clientFilter}
-          onChange={(e) =>
-            setClientFilter(
-              (e.target as HTMLSelectElement).value,
-            )}
-          class='px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
-        >
-          <option value=''>All Clients</option>
-          {clients.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        {traceId && (
+          )}
           <button
             type='button'
-            onClick={clearTrace}
-            class='px-3 py-2 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors'
+            onClick={load}
+            class='px-3 py-2 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors ml-auto'
           >
-            Trace: {traceId.slice(0, 12)}... &times;
+            Refresh
           </button>
-        )}
-        <button
-          type='button'
-          onClick={load}
-          class='px-3 py-2 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors ml-auto'
-        >
-          Refresh
-        </button>
-      </div>
+        </div>
+      )}
 
       {tab === 'trace' && traceEvents.length > 0 && (
         <TraceWaterfall

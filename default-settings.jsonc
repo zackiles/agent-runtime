@@ -108,7 +108,8 @@
     "slack-client-secret": "SLACK_CLIENT_SECRET",
     "ar-session-secret": "AR_SESSION_SECRET",
     "ar-admin-group": "AR_ADMIN_GROUP",
-    "ar-allowed-domains": "AR_ALLOWED_DOMAINS"
+    "ar-allowed-domains": "AR_ALLOWED_DOMAINS",
+    "ar-telemetry-key-pepper": "AR_TELEMETRY_KEY_PEPPER"
   },
 
   "bot": {
