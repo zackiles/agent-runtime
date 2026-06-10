@@ -122,6 +122,10 @@ session cookie. There is no API-key path.
   the HTTP ingest endpoint does not break in-process emitters. Any client that
   emits over HTTP must be issued a key (covered in
   [§15](#15-backward-compatibility-and-migration)).
+- `auditMiddleware` (`app.use('*', ...)`) runs after auth and currently records a
+  `telemetry` / `unknown` "created" audit row for **every** `POST /telemetry`.
+  This is unwanted at ingest volume and is addressed in
+  [§10 Phase 3](#10-implementation-plan).
 
 ### 2.4 Conclusion of the review
 
@@ -172,10 +176,10 @@ sequenceDiagram
     Admin->>Web: Create client "checkout-svc"
     Web->>CP: POST /telemetry/clients { name }
     CP->>CP: generate key, hash, store
-    CP-->>Web: { client, key: "artk_live_..." }  (once)
+    CP-->>Web: { client, key: "artk.live.<tenant>.<secret>" }  (once)
     Web-->>Admin: Show key once, copy-to-clipboard
 
-    App->>CP: POST /telemetry  (X-Telemetry-Key: artk_live_...)
+    App->>CP: POST /telemetry  (X-Telemetry-Key: artk.live.<tenant>.<secret>)
     CP->>CP: hash key, look up client, check revoked
     CP->>DB: ingest events (client = bound name)
     CP-->>App: 201 Created
@@ -216,10 +220,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_client_hash
 
 Field notes:
 
-- `key_hash` — SHA-256 of the plaintext key (salted, see [§6](#6-api-key-format-and-hashing)).
-  The plaintext is never stored.
+- `key_hash` — SHA-256 of the full key string, optionally peppered (see
+  [§6](#6-api-key-format-and-hashing)). The plaintext is never stored.
 - `key_prefix` / `key_last_four` — non-secret display fragments so the UI can show
-  `artk_live_…a1b2` for identification.
+  `artk.live.<tenant>.…a1b2` for identification.
 - `name` — used as the `client` label on ingested events; unique per tenant.
 - `revoked` — soft delete on rotate/delete so historical events keep a stable
   reference and so a revoked hash can never re-authenticate.
@@ -242,25 +246,49 @@ existing `scheduleSync(tenantId)` path automatically — no sync changes needed.
 ### Format
 
 ```
-artk_live_<32+ url-safe random chars>
+artk.<env>.<tenantId>.<secret>
 ```
 
-- `artk` = Agent Runtime telemetry key namespace; `live` reserved for a future
-  `test` variant.
-- The random component is generated with `crypto.getRandomValues` and base64url
-  encoded.
-- `key_prefix` stores `artk_live`; `key_last_four` stores the final 4 chars.
+Example: `artk.live.acme.9c1f8e2d…` (dots separate segments).
+
+- `artk` = Agent Runtime telemetry key namespace.
+- `<env>` = `live` (reserved: `test` variant).
+- `<tenantId>` = the owning tenant. This is **non-secret routing metadata** that
+  lets the auth middleware resolve and open the correct tenant DB *before* doing
+  the hash lookup (see [§7.1](#71-new-middleware-telemetrykeyauth) and the design
+  note below). Tenant ids match `^[a-z0-9][a-z0-9_-]{0,62}$` and never contain a
+  `.`, so `.` is an unambiguous delimiter.
+- `<secret>` = 32+ bytes from `crypto.getRandomValues`, base64url-encoded (the
+  base64url alphabet is `A–Z a–z 0–9 - _`, so it also contains no `.`).
+- `key_prefix` stores `artk.live.<tenantId>`; `key_last_four` stores the final 4
+  chars of the secret. Together they let the UI show a non-secret fingerprint
+  like `artk.live.acme.…a1b2`.
+
+> **Why the tenant is in the key.** Telemetry clients are stored in the
+> **per-tenant** SQLite DB, and the DB layer requires `open({ id: tenantId })`
+> before `getDb()` can run any query — there is no global/cross-tenant table to
+> scan by hash. A key-only `POST /telemetry` carries no tenant otherwise, so the
+> tenant must be derivable from the key (or the request) before the hash lookup.
+> Embedding it in the key keeps a single header and a single `/telemetry` path
+> while remaining implementable. Putting the tenant in the key is not a security
+> downgrade: knowing the tenant does not help an attacker, because the `<secret>`
+> must still match the stored hash.
 
 ### Hashing
 
-- At creation: compute `key_hash = sha256(pepper + plaintext)` using
-  `@std/crypto`, where `pepper` is an optional server-side secret
-  (`AR_TELEMETRY_KEY_PEPPER`); if unset, the hash is over the plaintext alone.
-- Lookups hash the presented key the same way and select by `key_hash` (indexed,
-  unique). Comparison is by the indexed equality lookup; no plaintext is ever
-  compared or logged.
+- At creation: compute `key_hash = sha256(pepper + fullKey)` using `@std/crypto`,
+  hashing the **entire** key string (including the `artk.<env>.<tenantId>.`
+  prefix), where `pepper` is an optional server-side secret
+  (`AR_TELEMETRY_KEY_PEPPER`); if unset, the hash is over the key alone.
+- Lookups parse the tenant from the key, open that tenant DB, then hash the
+  presented key the same way and select by `key_hash` within that tenant
+  (indexed). No plaintext is ever compared or logged.
 - The plaintext key is returned to the caller **only** in the HTTP response of the
   create and rotate operations and is never persisted or re-derivable.
+- Changing or setting `AR_TELEMETRY_KEY_PEPPER` after keys exist invalidates all
+  existing keys (their stored hashes no longer match). Rotating the pepper is
+  therefore a deliberate, fleet-wide revocation and must be coordinated with key
+  re-issuance.
 
 ---
 
@@ -271,14 +299,23 @@ artk_live_<32+ url-safe random chars>
 Add `telemetryKeyAuth` to `control-plane/src/middleware/auth.ts`. It:
 
 1. Reads the key from the header (`X-Telemetry-Key`, and also accepts
-   `Authorization: Bearer artk_...` for convenience).
+   `Authorization: Bearer artk....` for convenience).
 2. Returns `401` if absent or malformed (does not fall through to identity auth).
-3. Hashes the key and looks up the client via `db/telemetry-clients.getByHash`.
-4. Returns `401` if no match or `403` if the client is `revoked`.
-5. Resolves the tenant from the client row, opens the tenant DB, and sets
-   `c.set('tenantId', ...)` and a new `c.set('telemetryClient', { id, name })`
-   context value (added to `Env` in `control-plane/src/types.ts`).
-6. Calls `next()`.
+3. **Parses the tenant from the key** (`artk.<env>.<tenantId>.<secret>`),
+   validates the tenant id against `^[a-z0-9][a-z0-9_-]{0,62}$`, and
+   `open({ id: tenantId, name: tenantId }, 'server')` so `getDb()` has the right
+   tenant DB active. This step is mandatory because the `telemetry_client` table
+   is per-tenant and cannot be queried before its DB is opened.
+4. Hashes the presented key and looks up the client via
+   `db/telemetry-clients.getByHash` **scoped to the now-open tenant DB**.
+5. Returns `401` if no match or `403` if the client is `revoked`.
+6. Sets `c.set('tenantId', tenantId)` and a new
+   `c.set('telemetryClient', { id, name })` context value (added to `Env` in
+   `control-plane/src/types.ts`), best-effort updates `last_used_at`, and calls
+   `next()`.
+
+For the `POST /telemetry/t/:tenant` form, the tenant in the path must equal the
+tenant parsed from the key, else `403`.
 
 ### 7.2 Re-wiring in `mod.ts`
 
@@ -288,30 +325,33 @@ Today a single line guards the whole subtree:
 app.use('/telemetry/*', apiAuth)
 ```
 
-Replace with method/path-specific guards so writes use key auth and reads use
-identity:
+Hono's `app.use` matches all methods, so the method split is done inside a single
+dispatching middleware registered for the subtree, which delegates to the right
+auth function:
 
 ```
-// Ingest: API key only
-app.use('/telemetry', methodGuard('POST', telemetryKeyAuth))
-app.use('/telemetry/t/:tenant', methodGuard('POST', telemetryKeyAuth))
-
-// Read: admin identity (apiAuth + admin assertion in handlers)
-app.use('/telemetry/*', apiAuth)
-
-// Client management: admin identity
-app.use('/telemetry/clients', apiAuth)
-app.use('/telemetry/clients/*', apiAuth)
+app.use('/telemetry/*', (c, next) => {
+  const path = new URL(c.req.url).pathname
+  const isClients = path === '/telemetry/clients' ||
+    path.startsWith('/telemetry/clients/')
+  // Ingest is the only write path that uses key auth.
+  if (c.req.method === 'POST' && !isClients) {
+    return telemetryKeyAuth(c, next)
+  }
+  // Reads and client management use human identity (admin enforced in handlers).
+  return apiAuth(c, next)
+})
 ```
 
-Because Hono runs `use` middleware in registration order, the POST-guarded routes
-must be registered before the catch-all `apiAuth`, and `telemetryKeyAuth` must
-short-circuit (return a Response) rather than fall through so a POST never reaches
-`apiAuth`. The exact composition is an implementation detail; the contract is:
-**POST ⇒ key auth, everything else under `/telemetry` ⇒ identity auth.** The
-client-management routes are registered under `/telemetry/clients` and must be
-matched before the event `/:id` route to avoid `clients` being parsed as an event
-id.
+The contract is: **`POST /telemetry` and `POST /telemetry/t/:tenant` ⇒ key auth;
+everything else under `/telemetry` (reads + `/telemetry/clients` management) ⇒
+identity auth.** `telemetryKeyAuth` short-circuits (returns a Response) on
+failure so a write never falls through to identity auth.
+
+Routing order also matters: the client-management router must be mounted
+(`app.route('/telemetry/clients', telemetryClientsApi)`) **before**
+`app.route('/telemetry', telemetryApi)`, otherwise `clients` is parsed as an
+event id by the `GET /:id` route.
 
 ### 7.3 Admin assertion on read
 
@@ -336,11 +376,13 @@ ingest.
 ```
 POST /telemetry
 POST /telemetry/t/:tenant
-Header: X-Telemetry-Key: artk_live_...
+Header: X-Telemetry-Key: artk.live.<tenantId>.<secret>
 ```
 
 - Auth: telemetry API key. No identity/session accepted.
-- For `/t/:tenant`, the key's tenant must equal `:tenant` else `403`.
+- The tenant is resolved from the key itself (no separate tenant header needed on
+  the bare `/telemetry` path); the matching tenant DB is opened before lookup.
+- For `/t/:tenant`, the path tenant must equal the key's tenant else `403`.
 - `client` is derived from the key; `action` and `timestamp` remain required.
 - Updates `last_used_at` best-effort.
 
@@ -382,7 +424,7 @@ extracted into a sibling component file
 
 Features:
 
-- A table of clients: name, key fingerprint (`artk_live_…a1b2`), created by,
+- A table of clients: name, key fingerprint (`artk.live.<tenant>.…a1b2`), created by,
   created date, last used, status.
 - **Create client**: inline form (name input + button) → calls
   `POST /telemetry/clients` → shows the returned key once in a copy-to-clipboard
@@ -423,8 +465,20 @@ The dev mock (`web/dev/mock.ts`) gains handlers for the four client endpoints so
 
 | File | Change |
 | --- | --- |
-| `control-plane/src/api/telemetry-clients.ts` | New admin router: list/create/rotate/delete |
-| `control-plane/src/middleware/audit.ts` | Add `telemetry-clients → telemetry-client` to `ENTITY_TYPES` so mutations are audited |
+| `control-plane/src/api/telemetry-clients.ts` | New admin router: list/create/rotate/delete; log mutations explicitly via `db/audit.log` as entity type `telemetry-client` |
+| `control-plane/src/middleware/audit.ts` | Skip auditing high-volume telemetry **ingest** (`POST /telemetry`, `POST /telemetry/t/:tenant`) so the audit table is not flooded |
+
+**Audit details.** `auditMiddleware` derives the entity type from the *first*
+path segment, so for `/telemetry/clients` it would record `telemetry` / `clients`
+and drop the client id — wrong. Two concrete changes:
+
+1. The client-management handlers call `log(tenantId, 'telemetry-client', id,
+   action, email, { ... })` directly (the same `db/audit` helper the middleware
+   uses), giving correct entity type and id for create/rotate/delete.
+2. `auditMiddleware` early-returns for the telemetry ingest paths. Today every
+   `POST /telemetry` produces a `telemetry` / `unknown` "created" audit row; at
+   per-client ingest volume that floods the audit table, so ingest is excluded
+   from middleware auditing. (Reads are already skipped — they are not mutations.)
 
 ### Phase 4 — Web UI
 
@@ -480,10 +534,14 @@ Covered in [§11](#11-documentation-changes)–[§13](#13-config-and-settings-ch
   through to identity auth.
 - `POST /telemetry/t/:tenant` with a key whose tenant differs from `:tenant` →
   `403`.
+- Tenant resolution: a key for tenant A opens tenant A's DB and the event lands in
+  tenant A; a key with a malformed/unknown tenant segment → `401` (and never
+  queries another tenant's DB).
 - `GET /telemetry` with a telemetry key → rejected; with a non-admin identity →
   `403`; with an admin identity → `200`.
 - Client management endpoints reject non-admins (`403`) and accept admins.
-- `audit` row is written for create/rotate/delete.
+- `audit` row is written (entity type `telemetry-client`) for create/rotate/
+  delete, and **no** audit row is written for `POST /telemetry` ingest.
 
 ### Web
 
@@ -517,8 +575,8 @@ pass.
 - **Write-only keys.** Keys authorize `POST /telemetry` only. They cannot read
   events, list clients, or touch any other API. Read/admin stays behind human
   identity (and now admin-gated).
-- **Hash-at-rest.** Only salted SHA-256 hashes are stored; DB/GCS backup exposure
-  does not yield usable keys. Plaintext is shown exactly once.
+- **Hash-at-rest.** Only SHA-256 hashes (optionally peppered) are stored; DB/GCS
+  backup exposure does not yield usable keys. Plaintext is shown exactly once.
 - **No spoofing.** The `client` label is derived from the authenticated key, so a
   key holder cannot masquerade as another client.
 - **Tenant isolation.** A key resolves to exactly one tenant; `/t/:tenant` writes
@@ -570,7 +628,7 @@ pass.
 3. **Multiple active keys per client.** Single active key keeps rotation simple. Is
    overlapping dual-key rotation (issue new before revoking old) needed for
    zero-downtime rotation?
-4. **Header name.** `X-Telemetry-Key` vs reusing `Authorization: Bearer artk_...`.
+4. **Header name.** `X-Telemetry-Key` vs reusing `Authorization: Bearer artk....`.
    The RFC supports both; should we standardize on one?
 5. **`test` vs `live` key variants.** Reserved in the format but unused in v1 —
    worth implementing now or later?
