@@ -7,6 +7,11 @@ import {
   setAdmin,
 } from '@ar/client/db/users'
 import { getIdentity } from '@ar/client/db/slack'
+import {
+  getByHash as getClientByHash,
+  hash as hashKey,
+  touch as touchClient,
+} from '@ar/client/db/telemetry-clients'
 import { open } from '@ar/client/db'
 import { load as loadRuntime } from '@ar/client/runtime'
 import { decode, extract } from '../session.ts'
@@ -224,6 +229,67 @@ async function apiAuth(c: Context<Env>, next: Next): Promise<Response | void> {
   return c.json({ error: 'Missing Authorization header' }, 401)
 }
 
+const TELEMETRY_TENANT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
+async function telemetryKeyAuth(
+  c: Context<Env>,
+  next: Next,
+): Promise<Response | void> {
+  const header = c.req.header('X-Telemetry-Key') ||
+    (c.req.header('Authorization')?.startsWith('Bearer artk.')
+      ? c.req.header('Authorization')!.slice(7)
+      : '')
+  if (!header || !header.startsWith('artk.')) {
+    return c.json({ error: 'Telemetry key required' }, 401)
+  }
+
+  const segments = header.split('.')
+  if (segments.length < 4) {
+    return c.json({ error: 'Malformed telemetry key' }, 401)
+  }
+  const tenantId = segments[2]
+  if (!TELEMETRY_TENANT_PATTERN.test(tenantId)) {
+    return c.json({ error: 'Malformed telemetry key' }, 401)
+  }
+
+  const pathTenant = new URL(c.req.url).pathname
+    .match(/^\/telemetry\/t\/([^/]+)/)?.[1]
+  if (pathTenant && pathTenant !== tenantId) {
+    return c.json({ error: 'Key tenant does not match path tenant' }, 403)
+  }
+
+  // DANGER: this endpoint is unauthenticated until the key is verified. Confirm
+  // the tenant is a known one BEFORE open(), which would otherwise create,
+  // migrate, and seed a fresh DB for any attacker-supplied tenant segment and
+  // let invalid-key probes litter the disk with arbitrary tenant databases.
+  if (!loadRuntime().tenants.bootstrapped.includes(tenantId)) {
+    return c.json({ error: 'Invalid telemetry key' }, 401)
+  }
+
+  try {
+    await open({ id: tenantId, name: tenantId }, 'server')
+  } catch {
+    return c.json({ error: 'Invalid telemetry key' }, 401)
+  }
+
+  const client = getClientByHash(await hashKey(header))
+  if (!client || client.tenantId !== tenantId) {
+    return c.json({ error: 'Invalid telemetry key' }, 401)
+  }
+  if (client.revoked) {
+    return c.json({ error: 'Telemetry key revoked' }, 403)
+  }
+
+  c.set('tenantId', tenantId)
+  c.set('telemetryClient', { id: client.id, name: client.name })
+  try {
+    touchClient(tenantId, client.id)
+  } catch {
+    // last_used_at update is best-effort
+  }
+  return await next()
+}
+
 async function webAuth(c: Context<Env>, next: Next): Promise<Response | void> {
   const raw = extract(c.req.header('Cookie'))
   if (!raw) return c.redirect('/web/auth/login')
@@ -391,6 +457,7 @@ export {
   apiAuth,
   errorPage,
   slackBotAuth,
+  telemetryKeyAuth,
   validateDomain,
   verifyToken,
   webAuth,

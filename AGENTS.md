@@ -254,6 +254,15 @@ curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/api/agents
 curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/system
 curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/api/registry/status
 curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/audit
+
+# Reading telemetry needs an admin identity:
+curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/telemetry
+
+# Ingesting telemetry needs a telemetry API key (NOT an identity token):
+curl -X POST https://<cp-url>/telemetry \
+  -H "X-Telemetry-Key: artk.live.<tenantId>.<secret>" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"agent.deploy","timestamp":1712200000000}'
 ```
 
 Key diagnostic endpoints:
@@ -265,7 +274,9 @@ Key diagnostic endpoints:
 | `GET /api/registry/status`                    | Yes   | Registry sync state                                       |
 | `GET /runtime/status`                         | Yes   | Runtime config and mode                                   |
 | `GET /audit`                                  | Yes   | Audit trail of mutations                                  |
-| `GET /telemetry`                              | Admin | Telemetry records                                         |
+| `GET /telemetry`                              | Admin | Telemetry records (admin identity only)                   |
+| `POST /telemetry`                             | Key   | Ingest events; needs `X-Telemetry-Key`, not an identity   |
+| `GET /telemetry/clients`                      | Admin | Telemetry clients (mint/rotate/revoke keys)               |
 | `GET /agents/:id/deploy/status`               | Yes   | Agent deploy progress                                     |
 | `GET /api/artifacts/builds`                   | Yes   | Recent Cloud Build jobs                                   |
 | `DELETE /api/artifacts/packages/:name/builds` | Admin | Clear old builds, keep latest deployed                    |

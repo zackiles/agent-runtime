@@ -1,6 +1,6 @@
 # RFC-008: Telemetry Clients and API Keys
 
-**Status:** Proposed **Authors:** Agent Runtime Team **Created:** 2026-06-10
+**Status:** Implemented **Authors:** Agent Runtime Team **Created:** 2026-06-10
 
 ---
 
@@ -102,14 +102,14 @@ session cookie. There is no API-key path.
 
 ### 2.2 Endpoint inventory (`control-plane/src/api/telemetry.ts`)
 
-| Method & path | Handler | Purpose | Auth today | Auth after this RFC |
-| --- | --- | --- | --- | --- |
-| `POST /telemetry` | `handleIngest` | Ingest one/batch events for the session tenant | identity/session | **API key (header)** |
-| `POST /telemetry/t/:tenant` | `handleIngest` | Ingest scoped to an explicit tenant | identity/session | **API key (header)**; key's tenant must match `:tenant` |
-| `GET /telemetry` | `handleQuery` | Query events (filters + pagination) | identity/session | **admin identity only** |
-| `GET /telemetry/:id` | `handleGet` | Fetch one event | identity/session | **admin identity only** |
-| `GET /telemetry/t/:tenant` | `handleQuery` | Query scoped to a tenant | identity/session | **admin identity only** |
-| `GET /telemetry/t/:tenant/:id` | `handleGet` | Fetch one event for a tenant | identity/session | **admin identity only** |
+| Method & path                  | Handler        | Purpose                                        | Auth today       | Auth after this RFC                                     |
+| ------------------------------ | -------------- | ---------------------------------------------- | ---------------- | ------------------------------------------------------- |
+| `POST /telemetry`              | `handleIngest` | Ingest one/batch events for the session tenant | identity/session | **API key (header)**                                    |
+| `POST /telemetry/t/:tenant`    | `handleIngest` | Ingest scoped to an explicit tenant            | identity/session | **API key (header)**; key's tenant must match `:tenant` |
+| `GET /telemetry`               | `handleQuery`  | Query events (filters + pagination)            | identity/session | **admin identity only**                                 |
+| `GET /telemetry/:id`           | `handleGet`    | Fetch one event                                | identity/session | **admin identity only**                                 |
+| `GET /telemetry/t/:tenant`     | `handleQuery`  | Query scoped to a tenant                       | identity/session | **admin identity only**                                 |
+| `GET /telemetry/t/:tenant/:id` | `handleGet`    | Fetch one event for a tenant                   | identity/session | **admin identity only**                                 |
 
 ### 2.3 Indirect / internal consumers (must keep working)
 
@@ -254,7 +254,7 @@ Example: `artk.live.acme.9c1f8e2d…` (dots separate segments).
 - `artk` = Agent Runtime telemetry key namespace.
 - `<env>` = `live` (reserved: `test` variant).
 - `<tenantId>` = the owning tenant. This is **non-secret routing metadata** that
-  lets the auth middleware resolve and open the correct tenant DB *before* doing
+  lets the auth middleware resolve and open the correct tenant DB _before_ doing
   the hash lookup (see [§7.1](#71-new-middleware-telemetrykeyauth) and the design
   note below). Tenant ids match `^[a-z0-9][a-z0-9_-]{0,62}$` and never contain a
   `.`, so `.` is an unambiguous delimiter.
@@ -302,10 +302,15 @@ Add `telemetryKeyAuth` to `control-plane/src/middleware/auth.ts`. It:
    `Authorization: Bearer artk....` for convenience).
 2. Returns `401` if absent or malformed (does not fall through to identity auth).
 3. **Parses the tenant from the key** (`artk.<env>.<tenantId>.<secret>`),
-   validates the tenant id against `^[a-z0-9][a-z0-9_-]{0,62}$`, and
-   `open({ id: tenantId, name: tenantId }, 'server')` so `getDb()` has the right
-   tenant DB active. This step is mandatory because the `telemetry_client` table
-   is per-tenant and cannot be queried before its DB is opened.
+   validates the tenant id against `^[a-z0-9][a-z0-9_-]{0,62}$`, and — because
+   this endpoint is unauthenticated until the key is verified — confirms the
+   tenant is a **known/bootstrapped tenant before** calling
+   `open({ id: tenantId, name: tenantId }, 'server')`. `open` creates, migrates,
+   and seeds a fresh DB on miss, so opening on an attacker-supplied tenant
+   segment would let invalid-key probes litter the disk with arbitrary tenant
+   databases; the membership check returns `401` first. Opening is otherwise
+   mandatory because the `telemetry_client` table is per-tenant and cannot be
+   queried before its DB is opened.
 4. Hashes the presented key and looks up the client via
    `db/telemetry-clients.getByHash` **scoped to the now-open tenant DB**.
 5. Returns `401` if no match or `403` if the client is `revoked`.
@@ -402,12 +407,12 @@ GET /telemetry/t/:tenant/:id
 New router `control-plane/src/api/telemetry-clients.ts`, mounted at
 `/telemetry/clients`:
 
-| Method & path | Purpose | Response |
-| --- | --- | --- |
-| `GET /telemetry/clients` | List clients for tenant (no secrets) | `[{ id, name, keyPrefix, keyLastFour, createdBy, createdAt, lastUsedAt, revoked }]` |
-| `POST /telemetry/clients` | Create client `{ name }` | `{ client, key }` — **key shown once** |
-| `POST /telemetry/clients/:id/rotate` | Generate a new key, revoke old hash | `{ client, key }` — **key shown once** |
-| `DELETE /telemetry/clients/:id` | Delete (revoke) a client | `{ ok: true }` |
+| Method & path                        | Purpose                              | Response                                                                            |
+| ------------------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `GET /telemetry/clients`             | List clients for tenant (no secrets) | `[{ id, name, keyPrefix, keyLastFour, createdBy, createdAt, lastUsedAt, revoked }]` |
+| `POST /telemetry/clients`            | Create client `{ name }`             | `{ client, key }` — **key shown once**                                              |
+| `POST /telemetry/clients/:id/rotate` | Generate a new key, revoke old hash  | `{ client, key }` — **key shown once**                                              |
+| `DELETE /telemetry/clients/:id`      | Delete (revoke) a client             | `{ ok: true }`                                                                      |
 
 Name validation matches existing slug/name patterns; duplicate names within a
 tenant return `409`.
@@ -446,29 +451,29 @@ The dev mock (`web/dev/mock.ts`) gains handlers for the four client endpoints so
 
 ### Phase 1 — Data layer
 
-| File | Change |
-| --- | --- |
-| `sdk-client-deno/src/db/schema.ts` | Append `telemetry_client` migration; bump `SCHEMA_VERSION` |
+| File                                          | Change                                                                        |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `sdk-client-deno/src/db/schema.ts`            | Append `telemetry_client` migration; bump `SCHEMA_VERSION`                    |
 | `sdk-client-deno/src/db/telemetry-clients.ts` | New module: `create`, `list`, `get`, `getByHash`, `rotate`, `remove`, `touch` |
-| `sdk-client-deno/deno.jsonc` | Add `./db/telemetry-clients` subpath export |
+| `sdk-client-deno/deno.jsonc`                  | Add `./db/telemetry-clients` subpath export                                   |
 
 ### Phase 2 — Auth and ingest
 
-| File | Change |
-| --- | --- |
-| `control-plane/src/middleware/auth.ts` | Add `telemetryKeyAuth`; export it |
-| `control-plane/src/types.ts` | Add `telemetryClient` to `Env` context vars |
-| `control-plane/src/api/telemetry.ts` | Admin assertion on read handlers; bind `client` to key in `handleIngest` |
-| `control-plane/src/mod.ts` | Re-wire `/telemetry` guards (POST→key, GET→admin identity); mount clients router |
+| File                                   | Change                                                                           |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| `control-plane/src/middleware/auth.ts` | Add `telemetryKeyAuth`; export it                                                |
+| `control-plane/src/types.ts`           | Add `telemetryClient` to `Env` context vars                                      |
+| `control-plane/src/api/telemetry.ts`   | Admin assertion on read handlers; bind `client` to key in `handleIngest`         |
+| `control-plane/src/mod.ts`             | Re-wire `/telemetry` guards (POST→key, GET→admin identity); mount clients router |
 
 ### Phase 3 — Client management API
 
-| File | Change |
-| --- | --- |
-| `control-plane/src/api/telemetry-clients.ts` | New admin router: list/create/rotate/delete; log mutations explicitly via `db/audit.log` as entity type `telemetry-client` |
-| `control-plane/src/middleware/audit.ts` | Skip auditing high-volume telemetry **ingest** (`POST /telemetry`, `POST /telemetry/t/:tenant`) so the audit table is not flooded |
+| File                                         | Change                                                                                                                            |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `control-plane/src/api/telemetry-clients.ts` | New admin router: list/create/rotate/delete; log mutations explicitly via `db/audit.log` as entity type `telemetry-client`        |
+| `control-plane/src/middleware/audit.ts`      | Skip auditing high-volume telemetry **ingest** (`POST /telemetry`, `POST /telemetry/t/:tenant`) so the audit table is not flooded |
 
-**Audit details.** `auditMiddleware` derives the entity type from the *first*
+**Audit details.** `auditMiddleware` derives the entity type from the _first_
 path segment, so for `/telemetry/clients` it would record `telemetry` / `clients`
 and drop the client id — wrong. Two concrete changes:
 
@@ -482,11 +487,11 @@ and drop the client id — wrong. Two concrete changes:
 
 ### Phase 4 — Web UI
 
-| File | Change |
-| --- | --- |
-| `web/src/islands/telemetry.tsx` | Add Clients tab |
+| File                                    | Change                                        |
+| --------------------------------------- | --------------------------------------------- |
+| `web/src/islands/telemetry.tsx`         | Add Clients tab                               |
 | `web/src/islands/telemetry-clients.tsx` | New management component + one-time key modal |
-| `web/dev/mock.ts` | Mock client endpoints |
+| `web/dev/mock.ts`                       | Mock client endpoints                         |
 
 ### Phase 5 — Docs, tests, config
 

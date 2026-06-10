@@ -403,6 +403,12 @@ Search, filter, and trace telemetry events across the platform. Filter by time
 range, log level, and client. Click a trace ID to see the full span waterfall
 for a single request.
 
+External apps post events to `POST /telemetry` with a **telemetry API key** in
+the `X-Telemetry-Key` header. Mint a key on the **Clients** tab of the telemetry
+page — the plaintext key is shown only once. Reading telemetry and managing
+clients stay admin-only. See [docs/telemetry.md](docs/telemetry.md) for the key
+format and full ingest/query reference.
+
 ![Telemetry](docs/assets/web-telemetry.png)
 
 ### Audit Log

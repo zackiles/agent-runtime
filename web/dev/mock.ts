@@ -457,6 +457,100 @@ function handleSlackBotRoutes(
   return false
 }
 
+type MockClient = {
+  id: string
+  name: string
+  keyPrefix: string
+  keyLastFour: string
+  createdBy: string
+  createdAt: string
+  lastUsedAt: string | null
+  revoked: boolean
+}
+
+const mockClients: MockClient[] = [
+  {
+    id: 'tc-checkout',
+    name: 'checkout-svc',
+    keyPrefix: 'artk.live.local',
+    keyLastFour: 'a1b2',
+    createdBy: 'dev@local',
+    createdAt: new Date(Date.now() - 86400000).toISOString(),
+    lastUsedAt: new Date(Date.now() - 3600000).toISOString(),
+    revoked: false,
+  },
+]
+
+function mockKey(name: string): { client: MockClient; key: string } {
+  const secret = mockUuid().replace(/-/g, '') + mockUuid().replace(/-/g, '')
+  const client: MockClient = {
+    id: `tc-${Date.now()}`,
+    name,
+    keyPrefix: 'artk.live.local',
+    keyLastFour: secret.slice(-4),
+    createdBy: 'dev@local',
+    createdAt: new Date().toISOString(),
+    lastUsedAt: null,
+    revoked: false,
+  }
+  return { client, key: `artk.live.local.${secret}` }
+}
+
+async function handleTelemetryClientRoutes(
+  req: Connect.IncomingMessage,
+  res: Connect.ServerResponse,
+): Promise<boolean> {
+  const { path } = parseUrl(req.url || '')
+  const method = req.method || 'GET'
+
+  if (method === 'GET' && /^\/telemetry\/clients\/?$/.test(path)) {
+    stubJson(res, mockClients)
+    return true
+  }
+
+  if (method === 'POST' && /^\/telemetry\/clients\/?$/.test(path)) {
+    const raw = await readBody(req)
+    const data = JSON.parse(raw || '{}')
+    const name = (data.name || 'client').trim()
+    if (mockClients.some((c) => c.name === name && !c.revoked)) {
+      stubJson(res, { error: 'A client with that name already exists' }, 409)
+      return true
+    }
+    const { client, key } = mockKey(name)
+    mockClients.unshift(client)
+    stubJson(res, { client, key }, 201)
+    return true
+  }
+
+  const rotateMatch = path.match(/^\/telemetry\/clients\/([^/]+)\/rotate\/?$/)
+  if (method === 'POST' && rotateMatch) {
+    const existing = mockClients.find((c) => c.id === rotateMatch[1])
+    if (!existing) {
+      stubJson(res, { error: 'Client not found' }, 404)
+      return true
+    }
+    const { key } = mockKey(existing.name)
+    existing.keyLastFour = key.slice(-4)
+    existing.revoked = false
+    stubJson(res, { client: existing, key })
+    return true
+  }
+
+  const deleteMatch = path.match(/^\/telemetry\/clients\/([^/]+)\/?$/)
+  if (method === 'DELETE' && deleteMatch) {
+    const existing = mockClients.find((c) => c.id === deleteMatch[1])
+    if (!existing) {
+      stubJson(res, { error: 'Client not found' }, 404)
+      return true
+    }
+    existing.revoked = true
+    stubJson(res, { ok: true })
+    return true
+  }
+
+  return false
+}
+
 async function handleAccessRoutes(
   req: Connect.IncomingMessage,
   res: Connect.ServerResponse,
@@ -917,6 +1011,7 @@ export function mockApi(): Plugin {
           next: () => void,
         ) => {
           if (await handleAgentRoutes(req, res)) return
+          if (await handleTelemetryClientRoutes(req, res)) return
           if (await handleDemoRoutes(req, res)) return
           if (await handleSlackBotRoutes(req, res)) return
           if (await handleAccessRoutes(req, res)) return

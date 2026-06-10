@@ -31,7 +31,9 @@ async function handleIngest(c: Context<Env>) {
 
   const events: IngestEvent[] = body.events ? body.events : [body]
 
+  const clientName = c.get('telemetryClient')?.name
   for (const e of events) {
+    if (clientName) e.client = clientName
     if (!e.client || !e.action || e.timestamp == null) {
       return c.json(
         { error: 'client, action, and timestamp are required' },
@@ -45,6 +47,8 @@ async function handleIngest(c: Context<Env>) {
 }
 
 async function handleQuery(c: Context<Env>) {
+  if (!context(c).isAdmin) return c.json({ error: 'Admin only' }, 403)
+
   let tenantId: string
   try {
     tenantId = resolveTenant(c)
@@ -84,6 +88,8 @@ async function handleQuery(c: Context<Env>) {
 }
 
 async function handleGet(c: Context<Env>) {
+  if (!context(c).isAdmin) return c.json({ error: 'Admin only' }, 403)
+
   let tenantId: string
   try {
     tenantId = resolveTenant(c)
