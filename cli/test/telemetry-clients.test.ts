@@ -133,6 +133,15 @@ Deno.test('telemetryKeyAuth gates ingest by header key', async () => {
     true,
     'rejects revoked keys',
   )
+  const knownCheck = auth.indexOf('tenants.bootstrapped.includes(tenantId)')
+  const openCall = auth.indexOf(
+    "open({ id: tenantId, name: tenantId }, 'server')",
+  )
+  assertEquals(
+    knownCheck !== -1 && knownCheck < openCall,
+    true,
+    'validates the tenant is known before opening (creating) its DB',
+  )
 })
 
 Deno.test('mod.ts routes POST ingest to key auth, reads to identity', async () => {

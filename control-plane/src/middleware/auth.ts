@@ -258,6 +258,14 @@ async function telemetryKeyAuth(
     return c.json({ error: 'Key tenant does not match path tenant' }, 403)
   }
 
+  // DANGER: this endpoint is unauthenticated until the key is verified. Confirm
+  // the tenant is a known one BEFORE open(), which would otherwise create,
+  // migrate, and seed a fresh DB for any attacker-supplied tenant segment and
+  // let invalid-key probes litter the disk with arbitrary tenant databases.
+  if (!loadRuntime().tenants.bootstrapped.includes(tenantId)) {
+    return c.json({ error: 'Invalid telemetry key' }, 401)
+  }
+
   try {
     await open({ id: tenantId, name: tenantId }, 'server')
   } catch {

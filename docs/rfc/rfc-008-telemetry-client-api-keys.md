@@ -302,10 +302,15 @@ Add `telemetryKeyAuth` to `control-plane/src/middleware/auth.ts`. It:
    `Authorization: Bearer artk....` for convenience).
 2. Returns `401` if absent or malformed (does not fall through to identity auth).
 3. **Parses the tenant from the key** (`artk.<env>.<tenantId>.<secret>`),
-   validates the tenant id against `^[a-z0-9][a-z0-9_-]{0,62}$`, and
-   `open({ id: tenantId, name: tenantId }, 'server')` so `getDb()` has the right
-   tenant DB active. This step is mandatory because the `telemetry_client` table
-   is per-tenant and cannot be queried before its DB is opened.
+   validates the tenant id against `^[a-z0-9][a-z0-9_-]{0,62}$`, and — because
+   this endpoint is unauthenticated until the key is verified — confirms the
+   tenant is a **known/bootstrapped tenant before** calling
+   `open({ id: tenantId, name: tenantId }, 'server')`. `open` creates, migrates,
+   and seeds a fresh DB on miss, so opening on an attacker-supplied tenant
+   segment would let invalid-key probes litter the disk with arbitrary tenant
+   databases; the membership check returns `401` first. Opening is otherwise
+   mandatory because the `telemetry_client` table is per-tenant and cannot be
+   queried before its DB is opened.
 4. Hashes the presented key and looks up the client via
    `db/telemetry-clients.getByHash` **scoped to the now-open tenant DB**.
 5. Returns `401` if no match or `403` if the client is `revoked`.
