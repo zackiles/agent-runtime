@@ -210,10 +210,19 @@ The handler reads the resolved client from context
 (`c.get('telemetryClient')`) and the request origin, then renders a script with
 three substitutions:
 
-- **`INGEST_URL`** — `${origin}/telemetry`, where `origin` is taken from the
-  incoming request (`new URL(c.req.url).origin`, honoring `X-Forwarded-Proto` /
-  `X-Forwarded-Host` behind Cloud Run) or an optional `AR_PUBLIC_URL` override.
-  This removes any hard-coded `*.run.app` hostname.
+- **`INGEST_URL`** — `${origin}/telemetry`. The origin is resolved in priority
+  order: an explicit `AR_PUBLIC_URL` override, else the **forwarded** scheme and
+  host (`X-Forwarded-Proto` / `X-Forwarded-Host`), falling back to the request's
+  own scheme/host only when no forwarded headers are present. It must **not** be
+  derived from `new URL(c.req.url).origin` alone: behind Cloud Run (and any
+  TLS-terminating proxy) the upstream request the container sees is plain
+  `http://…`, so a naive origin would bake an `http://` ingest URL into the
+  script. Because the uploader posts with `--proto "=https"` and does not follow
+  redirects (see [§5.4](#54-the-rendered-script)), an `http://` URL would either
+  fail outright or risk sending the telemetry key over cleartext. Honoring the
+  forwarded scheme keeps the baked URL HTTPS; `AR_PUBLIC_URL` is the recommended,
+  unambiguous setting for proxied production deployments. This also removes any
+  hard-coded `*.run.app` hostname.
 - **`TOOL`** — the validated `?tool=` value (`claude-code`, `cursor`, else
   `ai`), used only as a tag and action prefix.
 - **`CLIENT`** — the authenticated client's `name`, embedded as a comment for
@@ -276,8 +285,8 @@ fi
 ts=$(( $(/bin/date +%s) * 1000 ))
 body="{\"action\":\"${TOOL}.stop\",\"timestamp\":${ts},\"level\":\"info\",\"tags\":{\"tool\":\"${TOOL}\"},\"context\":{\"hook\":${hook}}}"
 
-printf '%s' "$body" | /usr/bin/curl -fsS --retry 2 --connect-timeout 5 \
-  --max-time 30 \
+printf '%s' "$body" | /usr/bin/curl -fsS --proto "=https" --tlsv1.2 \
+  --retry 2 --connect-timeout 5 --max-time 30 \
   -H "X-Telemetry-Key: ${AR_TELEMETRY_KEY}" \
   -H "Content-Type: application/json" \
   --data-binary @- \
@@ -420,6 +429,19 @@ substitutes the three placeholders. The key is never read into the template — 
 is supplied to the uploader at runtime via the hook environment. Sketch:
 
 ```ts
+function publicOrigin(c: Context<Env>): string {
+  const override = Deno.env.get('AR_PUBLIC_URL')
+  if (override) return override.replace(/\/+$/, '')
+  const url = new URL(c.req.url)
+  // Behind Cloud Run / a TLS-terminating proxy the upstream request is http://,
+  // so prefer the forwarded scheme/host and only fall back to the raw request.
+  const proto = c.req.header('X-Forwarded-Proto')?.split(',')[0].trim() ||
+    url.protocol.replace(':', '')
+  const host = c.req.header('X-Forwarded-Host')?.split(',')[0].trim() ||
+    c.req.header('Host') || url.host
+  return `${proto}://${host}`
+}
+
 app.get('/script', (c) => {
   const client = c.get('telemetryClient')
   if (!client) return c.json({ error: 'Telemetry key required' }, 401)
@@ -427,9 +449,8 @@ app.get('/script', (c) => {
   const toolRaw = c.req.query('tool') || 'ai'
   const tool = ['claude-code', 'cursor'].includes(toolRaw) ? toolRaw : 'ai'
 
-  const origin = Deno.env.get('AR_PUBLIC_URL') || new URL(c.req.url).origin
   const script = UPLOADER_TEMPLATE
-    .replaceAll('__INGEST_URL__', `${origin}/telemetry`)
+    .replaceAll('__INGEST_URL__', `${publicOrigin(c)}/telemetry`)
     .replaceAll('__TOOL__', tool)
     .replaceAll('__CLIENT__', client.name)
 
@@ -528,8 +549,10 @@ automatically once added — no registration step.
   falls through to identity auth), mirroring the ingest auth tests.
 - `?tool=` validation: `claude-code` / `cursor` pass through; anything else
   renders `ai`.
-- Origin resolution: `AR_PUBLIC_URL` override wins; otherwise the request origin
-  is used.
+- Origin resolution: `AR_PUBLIC_URL` override wins; otherwise the forwarded
+  scheme/host is used. A request with `X-Forwarded-Proto: https` (and an
+  upstream `http://` request URL, as on Cloud Run) renders an **`https://`**
+  ingest URL — never `http://`.
 
 ### End-to-end mapping
 
@@ -548,10 +571,14 @@ All suites run under `deno task test`; `deno task check` must pass.
 
 ## 12. Config and Settings Changes
 
-- **`AR_PUBLIC_URL`** (optional) — explicit public base URL for the control
-  plane, used by the script endpoint when the request origin is not trustworthy.
-  If added, document it in [CONFIG.md](../../CONFIG.md); when unset the request
-  origin is used, so no new required config is introduced.
+- **`AR_PUBLIC_URL`** (optional but recommended for proxied deployments) —
+  explicit public base URL (e.g. `https://ar-control-plane.example.com`) baked
+  into the generated ingest URL. When unset, the endpoint derives the origin from
+  the forwarded scheme/host (`X-Forwarded-Proto` / `X-Forwarded-Host`); setting
+  `AR_PUBLIC_URL` removes any ambiguity behind a TLS-terminating proxy and
+  guarantees an HTTPS ingest URL. Document it in [CONFIG.md](../../CONFIG.md). No
+  new _required_ config is introduced, but operators running behind a proxy
+  should set it.
 - **`AR_TELEMETRY_TRANSCRIPT_BYTES`** — a _client-side_ env var read by the
   uploader (default 64 KiB, `0` disables). It is set in the managed hook config,
   not in `default-settings.jsonc`.
