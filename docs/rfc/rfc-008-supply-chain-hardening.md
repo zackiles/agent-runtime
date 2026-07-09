@@ -18,12 +18,12 @@ install flow on the consumer side has no verification either.
 
 This RFC proposes four phases of hardening, ordered by cost and risk:
 
-| Phase | Theme | Effort | Risk | Ships |
-|---|---|---|---|---|
-| **1** | Pin everything that references a mutable ref | 1 day | None | Repo/workflow config only |
-| **2** | Sign and attest every artifact | 2–3 days | Low | New release artifacts (bundles, provenance, SBOM) |
-| **3** | Harden build inputs (install scripts, Cloud Build) | 1 week | Low | CP + base-image changes |
-| **4** | Enforce signatures at deploy time | Follow-up | Medium | CLI feature flag, then BinAuthz |
+| Phase | Theme                                              | Effort    | Risk   | Ships                                             |
+| ----- | -------------------------------------------------- | --------- | ------ | ------------------------------------------------- |
+| **1** | Pin everything that references a mutable ref       | 1 day     | None   | Repo/workflow config only                         |
+| **2** | Sign and attest every artifact                     | 2–3 days  | Low    | New release artifacts (bundles, provenance, SBOM) |
+| **3** | Harden build inputs (install scripts, Cloud Build) | 1 week    | Low    | CP + base-image changes                           |
+| **4** | Enforce signatures at deploy time                  | Follow-up | Medium | CLI feature flag, then BinAuthz                   |
 
 Each phase is independently shippable; nothing in a later phase is required
 for an earlier phase to deliver value. Phase 1 alone closes the concrete
@@ -37,22 +37,22 @@ Every proposal in this RFC with its phase, effort, and the threat (§3) it
 addresses. Proposals appear in this order throughout the document so that
 reading top-to-bottom is reading priority-first.
 
-| # | Proposal | Phase | Effort | Threat |
-|---|---|---|---|---|
-| 4.1 | SHA-pin all GitHub Actions | 1 | 1 hour | T1 |
-| 4.2 | Digest-pin every base image (consolidated) | 1 | 1 hour | T2 |
-| 4.3 | Scope `GITHUB_TOKEN` per job | 1 | 15 min | T1 blast radius |
-| 4.4 | Dependabot for Actions and base images | 1 | 10 min | Pin hygiene |
-| 4.5 | Branch protection on `main` | 1 | 5 min | Direct-push |
-| 4.6 | Sign release binaries and images with cosign | 2 | 2 hours | T3, T4 |
-| 4.7 | SLSA build provenance attestations | 2 | 1 hour | Audit |
-| 4.8 | Generate and attach SBOMs | 2 | 1 hour | CVE response |
-| 4.9 | Verified `curl \| sh` install | 2 | 2 hours | T3 on install |
-| 4.10 | Contain `install.sh` execution in the base image | 3 | 2 hours | Tool compromise → root |
-| 4.11 | Pin external binaries fetched by tool `install.sh` | 3 | 3 hours | T5 |
-| 4.12 | Harden the Cloud Build input path | 3 | 4 hours | T4 |
-| 4.13 | Verify signatures at deploy time (client + BinAuthz) | 4 | 1 day | T4 |
-| 4.14 | SSH-agent forwarding (considered, rejected) | — | — | — |
+| #    | Proposal                                             | Phase | Effort  | Threat                 |
+| ---- | ---------------------------------------------------- | ----- | ------- | ---------------------- |
+| 4.1  | SHA-pin all GitHub Actions                           | 1     | 1 hour  | T1                     |
+| 4.2  | Digest-pin every base image (consolidated)           | 1     | 1 hour  | T2                     |
+| 4.3  | Scope `GITHUB_TOKEN` per job                         | 1     | 15 min  | T1 blast radius        |
+| 4.4  | Dependabot for Actions and base images               | 1     | 10 min  | Pin hygiene            |
+| 4.5  | Branch protection on `main`                          | 1     | 5 min   | Direct-push            |
+| 4.6  | Sign release binaries and images with cosign         | 2     | 2 hours | T3, T4                 |
+| 4.7  | SLSA build provenance attestations                   | 2     | 1 hour  | Audit                  |
+| 4.8  | Generate and attach SBOMs                            | 2     | 1 hour  | CVE response           |
+| 4.9  | Verified `curl \| sh` install                        | 2     | 2 hours | T3 on install          |
+| 4.10 | Contain `install.sh` execution in the base image     | 3     | 2 hours | Tool compromise → root |
+| 4.11 | Pin external binaries fetched by tool `install.sh`   | 3     | 3 hours | T5                     |
+| 4.12 | Harden the Cloud Build input path                    | 3     | 4 hours | T4                     |
+| 4.13 | Verify signatures at deploy time (client + BinAuthz) | 4     | 1 day   | T4                     |
+| 4.14 | SSH-agent forwarding (considered, rejected)          | —     | —       | —                      |
 
 ---
 
@@ -107,34 +107,39 @@ Agent Runtime produces four classes of build artifact, each through a
 different pipeline. Understanding which pipeline builds what is a
 prerequisite for deciding where to sign:
 
-| Artifact | Built by | Uses |
-|---|---|---|
-| CLI binaries (`ar-{linux,darwin}-{x64,arm64}`) | `.github/workflows/release.yml` via `deno task build --cross` | GitHub Releases → `install.sh` |
-| Base agent image (`ar-agents/base:<ver>`) | `release.yml` **or** `ar cp deploy` (via `gcloud builds submit`), built from `Dockerfile.agent-base` | Parent for per-agent images |
-| Per-agent images (`ar-agents/<slug>:<ver>`) | Cloud Build, inline Dockerfile from `control-plane/src/api/agents.ts:550-578` | Each tenant's Cloud Run agents |
-| Control-plane image | Cloud Build via `gcloud run deploy --source=` (`cli/src/commands/control-plane.ts:144-155`, `FROM debian:trixie-slim`) | Cloud Run control plane |
+| Artifact                                       | Built by                                                                                                                                                                                                                                                       | Uses                           |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| CLI binaries (`ar-{linux,darwin}-{x64,arm64}`) | `.github/workflows/release.yml` via `deno task build --cross`                                                                                                                                                                                                  | GitHub Releases → `install.sh` |
+| Base agent image (`ar-agents/base:<ver>`)      | `release.yml` (`docker build`) **or** `ar cp deploy` → `buildBaseImage` (`cli/src/commands/control-plane.ts:551`), which prefers local `docker build`/`push` and falls back to `gcloud builds submit` when Docker is absent; both from `Dockerfile.agent-base` | Parent for per-agent images    |
+| Per-agent images (`ar-agents/<slug>:<ver>`)    | Cloud Build, inline Dockerfile from `control-plane/src/api/agents.ts:550-578`                                                                                                                                                                                  | Each tenant's Cloud Run agents |
+| Control-plane image                            | Cloud Build via `gcloud run deploy --source=` (`cli/src/commands/control-plane.ts:144-155`, `FROM debian:trixie-slim`)                                                                                                                                         | Cloud Run control plane        |
 
-The top-level `Dockerfile` in the repo is **not used by any workflow or CLI
-command** (verified by repo-wide search). It runs as root with
-`deno run -A` and is the subject of `SECURITY-TODO.md` #19. This RFC
-recommends deleting it rather than maintaining it (§4.2).
+The top-level `Dockerfile` is **not built by any workflow step or CLI
+command** — `release.yml` builds `Dockerfile.agent-base`, and `ar cp deploy`
+writes its own Dockerfile to a staging directory
+(`cli/src/commands/control-plane.ts:144-155`, `:287`). It is not orphaned
+from tooling config, though: `.gcloudignore:2` un-ignores it (`!Dockerfile`)
+and `CONTRIBUTING.md:107` still documents it as the "Production container
+image". It runs as root with `deno run -A` and is the subject of
+`SECURITY-TODO.md` #19. This RFC recommends deleting it, along with those two
+references, rather than maintaining it (§4.2).
 
 ### Gaps found in the audit
 
-| Area | Current state | Gap |
-|---|---|---|
-| GitHub Actions refs | 14 `uses:` lines pinned to major tags (`@v4`, `@v3`, `@v2`) | Tags are mutable |
-| Base image refs | `node:22-slim`, `denoland/deno:2.1.4`, `debian:trixie-slim`, and **`denoland/deno:latest`** in `control-plane/src/api/demos/build.ts:38` | Tag substitution; `:latest` is the worst case |
-| Binary / image signing | None | Consumers cannot verify our artifacts |
-| Provenance, SBOM | None | No SLSA attestation, no CVE index |
-| `install.sh` (consumer-side) | `curl -fsSL $url -o $tmp && mv $tmp /usr/local/bin/ar` | No checksum, no signature verification |
-| `GITHUB_TOKEN` scope | `contents: write` + `id-token: write` at workflow level | `deploy` job inherits `contents: write` it doesn't need |
-| Third-party actions | 6 distinct; `softprops/action-gh-release` is the riskiest (single maintainer) | Compromise propagates on next run |
-| Cloud Build input | CP uploads tarball to GCS; Cloud Build pulls by path | No digest pinning of the upload |
-| Cloud Build builders | `gcr.io/cloud-builders/docker`, `ubuntu` referenced by tag | Not digest-pinned |
-| `install.sh` execution in base image | Runs every tool's script as root | Any compromised tool gets root |
-| `install.sh` external fetches | `curl` to `downloads.cursor.com` etc. with no checksum | CDN/DNS compromise → base image |
-| Unused top-level `Dockerfile` | Exists, pins `denoland/deno:2.1.4` by tag, runs as root with `-A` | Developer-bait for a future production build path |
+| Area                                 | Current state                                                                                                                                                                                                                                                               | Gap                                                     |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| GitHub Actions refs                  | 17 `uses:` lines (6 distinct actions) pinned to major tags (`@v4`, `@v3`, `@v2`) across `release.yml` (7), `ci.yml` (7), `test-deno.yml` (3)                                                                                                                                | Tags are mutable                                        |
+| Base image refs                      | `node:22-slim`, `denoland/deno:2.1.4`, `debian:trixie-slim`, and **`denoland/deno:latest`** emitted by `generateDockerfileScript()` in `control-plane/src/api/demos/build.ts:172` (the exported `*_DOCKERFILE` consts carry the same tags but are referenced only by tests) | Tag substitution; `:latest` is the worst case           |
+| Binary / image signing               | None                                                                                                                                                                                                                                                                        | Consumers cannot verify our artifacts                   |
+| Provenance, SBOM                     | None                                                                                                                                                                                                                                                                        | No SLSA attestation, no CVE index                       |
+| `install.sh` (consumer-side)         | `curl -fsSL $url -o $tmp && mv $tmp /usr/local/bin/ar`                                                                                                                                                                                                                      | No checksum, no signature verification                  |
+| `GITHUB_TOKEN` scope                 | `contents: write` + `id-token: write` at workflow level                                                                                                                                                                                                                     | `deploy` job inherits `contents: write` it doesn't need |
+| Third-party actions                  | 6 distinct; `softprops/action-gh-release` is the riskiest (single maintainer)                                                                                                                                                                                               | Compromise propagates on next run                       |
+| Cloud Build input                    | CP uploads tarball to GCS; Cloud Build pulls by path                                                                                                                                                                                                                        | No digest pinning of the upload                         |
+| Cloud Build builders                 | `gcr.io/cloud-builders/docker`, `ubuntu` (per-agent), `bash` (demos) referenced by tag                                                                                                                                                                                      | Not digest-pinned                                       |
+| `install.sh` execution in base image | Runs every tool's script as root                                                                                                                                                                                                                                            | Any compromised tool gets root                          |
+| `install.sh` external fetches        | `curl` to `downloads.cursor.com` etc. with no checksum                                                                                                                                                                                                                      | CDN/DNS compromise → base image                         |
+| Unused top-level `Dockerfile`        | Exists, pins `denoland/deno:2.1.4` by tag, runs as root with `-A`; kept alive only by `.gcloudignore:2` and `CONTRIBUTING.md:107`                                                                                                                                           | Developer-bait for a future production build path       |
 
 ---
 
@@ -191,7 +196,8 @@ lowest-risk fixes and can ship as a single PR.
 
 Replace every `uses: owner/action@vN` with `uses: owner/action@<40-char SHA>`
 and a trailing comment noting the human-readable version. Affected files:
-`.github/workflows/{release,ci,test-deno}.yml` — 14 `uses:` lines total.
+`.github/workflows/{release,ci,test-deno}.yml` — 17 `uses:` lines total
+(6 distinct actions; `actions/checkout` appears five times).
 
 ```yaml
 - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -213,22 +219,25 @@ rather than trusting the tag.
 Fix every base-image reference in the repo in one pass. Base images live in
 five categories:
 
-| Location | Current | Notes |
-|---|---|---|
-| `Dockerfile.agent-base` | `FROM node:22-slim` | Built by `release.yml` and `ar cp deploy` |
-| `.devcontainer/Dockerfile` | `FROM denoland/deno:2.1.4` | Developer machines, lower risk |
-| `default-settings.jsonc` (`agents.baseImage`, `controlPlane.baseImage`) | `"node:22-slim"`, `"debian:trixie-slim"` | Parameterises the CLI-generated CP Dockerfile |
-| `control-plane/src/api/demos/build.ts` (`NODE_`, `STATIC_`, `VANILLA_NODE_`, `DENO_DOCKERFILE`) | `node:22-slim`, `denoland/deno:latest` | `:latest` must be fixed; this is the worst pin in the repo |
-| Top-level `Dockerfile` | `denoland/deno:2.1.4` | **Delete** — unused, vulnerable, misleading |
+| Location                                                                                                                                                                                                                                                                                  | Current                                  | Notes                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| `Dockerfile.agent-base`                                                                                                                                                                                                                                                                   | `FROM node:22-slim`                      | Built by `release.yml` and `ar cp deploy`                  |
+| `.devcontainer/Dockerfile`                                                                                                                                                                                                                                                                | `FROM denoland/deno:2.1.4`               | Developer machines, lower risk                             |
+| `default-settings.jsonc` (`agents.baseImage`, `controlPlane.baseImage`)                                                                                                                                                                                                                   | `"node:22-slim"`, `"debian:trixie-slim"` | Parameterises the CLI-generated CP Dockerfile              |
+| `control-plane/src/api/demos/build.ts` — `generateDockerfileScript()` (the code path Cloud Build actually runs; `:172` `denoland/deno:latest`, plus `node:22-slim` at `:111/:119/:129/:140/:157`) and the exported `NODE_`/`STATIC_`/`VANILLA_NODE_`/`DENO_DOCKERFILE` consts (test-only) | `node:22-slim`, `denoland/deno:latest`   | `:latest` must be fixed; this is the worst pin in the repo |
+| Top-level `Dockerfile`                                                                                                                                                                                                                                                                    | `denoland/deno:2.1.4`                    | **Delete** — unused, vulnerable, misleading                |
 
 Change every `FROM owner/image:tag` to `FROM owner/image:tag@sha256:<digest>`.
 Delete the unused top-level `Dockerfile` as part of the same PR — it's
 subject to `SECURITY-TODO.md` #19 and confusing to new contributors who
-assume production uses it.
+assume production uses it — and remove its two dangling references
+(`.gcloudignore:2` `!Dockerfile`, `CONTRIBUTING.md:107`).
 
-The TS string-literal Dockerfiles (`demos/build.ts`, `control-plane.ts`
-`DOCKERFILE` const) are invisible to Dependabot's `docker` ecosystem. Two
-options:
+The TS string-literal Dockerfiles (`demos/build.ts` — both the exported
+consts and the heredocs inside `generateDockerfileScript()`; the
+`control-plane.ts` `DOCKERFILE` const, whose `FROM` is
+`default-settings.jsonc`'s `controlPlane.baseImage`) are invisible to
+Dependabot's `docker` ecosystem. Two options:
 
 - Extract each to a real `*.Dockerfile` template committed to the repo
   and read at runtime. Dependabot then sees them.
@@ -254,14 +263,14 @@ Every job inherits both. The `deploy` job doesn't need `contents: write`;
 the `check` job in `ci.yml` doesn't need `id-token: write`. Split per job:
 
 ```yaml
-permissions: {}   # workflow default: none
+permissions: {} # workflow default: none
 
 jobs:
   release:
     permissions:
       contents: write
       id-token: write
-      attestations: write   # enables §4.7
+      attestations: write # enables §4.7
   deploy:
     permissions:
       contents: read
@@ -424,8 +433,13 @@ verify. Two-tier plan:
 2. Add an opt-out `AR_VERIFY=0` for air-gapped users; default `AR_VERIFY=1`
    after two weeks of bake.
 
-Apply the same treatment to `skill/install.sh`. Release notes document the
-manual verification command.
+`skill/install.sh` is a different shape: it `curl`s `skill/SKILL.md`
+(a markdown doc) from `raw.githubusercontent.com/.../main/` and writes it
+into `~/.claude` and `~/.cursor` — no binary, no release artifact. Signature
+verification of a release blob does not map cleanly. Lower-priority options:
+pin to a tagged raw URL and verify a cosign-signed `SKILL.md.sha256`, or
+accept the residual risk since the payload is inert text executed by nothing.
+Release notes document the manual binary verification command.
 
 ---
 
@@ -435,9 +449,9 @@ manual verification command.
 
 **Threat:** Compromised tool → root in every agent. **Effort:** ~2 hours.
 
-`Dockerfile.agent-base:19-27` runs every tool's `install.sh` as root. Five
-tools ship install scripts today (`cursor`, `claude`, `github`, `datadog`,
-`auth0`). Mitigations:
+`Dockerfile.agent-base:9-28` loops over every tool and runs its `install.sh`
+as root (`sh install.sh` at `:21`). Five tools ship install scripts today
+(`cursor`, `claude`, `github`, `datadog`, `auth0`). Mitigations:
 
 1. Multi-stage: run installs as non-root in a dedicated stage, then
    `COPY --from=installer /app/tools/ /app/tools/` into the final image.
@@ -445,7 +459,7 @@ tools ship install scripts today (`cursor`, `claude`, `github`, `datadog`,
    shell loop before executing the script.
 3. Longer term: drop `install.sh` entirely for pre-built binaries
    committed via Git LFS — the existing pattern for most tools
-   (`AGENTS.md` "default-registry/tools/*/[0-9]*/tool tracked by git LFS").
+   (`AGENTS.md`: `default-registry/tools/*/[0-9]*/tool` tracked by git LFS).
    This also eliminates the network dependency at image-build time, which
    is what §4.11 addresses.
 
@@ -477,8 +491,10 @@ The other four install scripts follow the same pattern. Options:
        "version": "2025.12.17",
        "urlTemplate": "https://downloads.cursor.com/lab/{version}/{os}/{arch}/agent-cli-package.tar.gz",
        "sha256": {
-         "linux/x64": "…", "linux/arm64": "…",
-         "darwin/x64": "…", "darwin/arm64": "…"
+         "linux/x64": "…",
+         "linux/arm64": "…",
+         "darwin/x64": "…",
+         "darwin/arm64": "…"
        }
      }
    }
@@ -499,11 +515,13 @@ A scheduled workflow detects new upstream versions and opens a PR with
 
 Three flows need hardening:
 
-- **Per-agent builds** (`control-plane/src/api/agents.ts:559-581`) from a
-  GCS tarball on `<project>-ar-registry`.
-- **Demo builds** (`control-plane/src/api/demos/deploy.ts:267`).
+- **Per-agent builds** (`control-plane/src/api/agents.ts:559-578`) from a
+  GCS tarball on `<project>-ar-registry`; builders `ubuntu` and
+  `gcr.io/cloud-builders/docker`.
+- **Demo builds** (`control-plane/src/api/demos/deploy.ts:321-342`);
+  builders `bash` and `gcr.io/cloud-builders/docker`.
 - **CP deploys** via `gcloud run deploy --source=<staging>`
-  (`cli/src/commands/control-plane.ts:1055-1080`).
+  (`cli/src/commands/control-plane.ts:1055-1077`).
 
 Common hardening:
 
@@ -517,8 +535,8 @@ Common hardening:
    against the Cloud Build SA identity. Signatures feed §4.13's
    verification.
 4. **Digest-pin Cloud Build builder images** (`gcr.io/cloud-builders/docker`,
-   `ubuntu`) in every `steps[].name` emitted by the CP. Same change as
-   §4.2 for base images, different files.
+   `ubuntu`, `bash`) in every `steps[].name` emitted by the CP. Same change
+   as §4.2 for base images, different files.
 
 ---
 
@@ -597,12 +615,12 @@ sealed-build workflow for regulated customers), BuildKit
 Three shippable PRs plus one follow-up. Phase numbers match the Priority
 Matrix above.
 
-| Phase | Contents | PR cost | Runtime impact |
-|---|---|---|---|
-| **1** | §4.1–§4.5 | 1 day | None — repo/workflow config |
-| **2** | §4.6–§4.9 | 2–3 days | New release artifacts; `AR_VERIFY=0` opt-out |
-| **3** | §4.10–§4.12 | 1 week | Base image + CP changes; backwards-compatible |
-| **4** | §4.13 | 1 week, gated | Feature-flagged; opt-in for CI tenant first |
+| Phase | Contents    | PR cost       | Runtime impact                                |
+| ----- | ----------- | ------------- | --------------------------------------------- |
+| **1** | §4.1–§4.5   | 1 day         | None — repo/workflow config                   |
+| **2** | §4.6–§4.9   | 2–3 days      | New release artifacts; `AR_VERIFY=0` opt-out  |
+| **3** | §4.10–§4.12 | 1 week        | Base image + CP changes; backwards-compatible |
+| **4** | §4.13       | 1 week, gated | Feature-flagged; opt-in for CI tenant first   |
 
 Phase 1 alone is the single most valuable PR in this RFC and should ship
 first. It closes the concrete attack surface raised by the original audit
@@ -631,16 +649,24 @@ rg '^\s*uses: [^@]+@v[0-9]+\s*$' .github/workflows/
 rg '^FROM [^@]+:[^@]+$' Dockerfile.agent-base .devcontainer/Dockerfile
 # Expected: no matches
 
-# No unpinned base images in TS-generated Dockerfiles
-rg '^FROM [^@]+:[^@]+' control-plane/src/api/demos/build.ts cli/src/commands/control-plane.ts
+# No :latest anywhere in the demo build code path
+rg ':latest' control-plane/src/api/demos/build.ts
 # Expected: no matches
 
-# Settings-file pins contain digests
+# Every image ref in the TS Dockerfile sources carries a digest.
+# NB: these FROMs are template-literal/array elements, not line-anchored,
+# and control-plane.ts interpolates `FROM ${...baseImage}` — so grep the
+# image names, not '^FROM'.
+rg 'FROM (node|denoland/deno|nginx|debian)' control-plane/src/api/demos/build.ts
+# Expected: every match line contains '@sha256:'
+
+# The CP image FROM is parameterised; its pin lives in settings
 rg '"baseImage"' default-settings.jsonc
 # Expected: each value contains '@sha256:'
 
-# Dead Dockerfile is gone
+# Dead Dockerfile and its dangling references are gone
 test ! -f Dockerfile && echo ok
+rg -q '!Dockerfile' .gcloudignore || echo 'gcloudignore clean'
 ```
 
 ### After Phase 2
@@ -703,15 +729,15 @@ permissions:
 ```
 
 ```226:234:.github/workflows/release.yml
-      - name: Build and push base agent image
-        run: |
-          VERSION="${{ needs.release.outputs.version }}"
-          REGION="${{ vars.GCP_REGION }}"
-          PROJECT="${{ vars.GCP_PROJECT }}"
-          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/ar-agents/base:${VERSION}"
-          docker build -f Dockerfile.agent-base -t "$IMAGE" .
-          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
-          docker push "$IMAGE"
+- name: Build and push base agent image
+  run: |
+    VERSION="${{ needs.release.outputs.version }}"
+    REGION="${{ vars.GCP_REGION }}"
+    PROJECT="${{ vars.GCP_PROJECT }}"
+    IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/ar-agents/base:${VERSION}"
+    docker build -f Dockerfile.agent-base -t "$IMAGE" .
+    gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+    docker push "$IMAGE"
 ```
 
 ### Proposed post-hardening build-and-sign block
