@@ -33,6 +33,11 @@
     // Mirrors the CI quality gate. Runs in: Deno (local)
     "check": "deno fmt && deno lint --fix && deno check cli/src/**/*.ts sdk-client-deno/src/**/*.ts control-plane/src/**/*.ts",
 
+    // Point git at the tracked .githooks/ directory so the pre-commit hook
+    // (auto-formats staged files) is active. Run once after cloning.
+    // Runs in: git (local)
+    "hooks": "git config core.hooksPath .githooks",
+
     // Run the test suite. Accepts args, e.g. deno task test workspace.
     // Runs in: Deno (local, some tests require gcloud auth)
     "test": "cd cli && DENO_ENV=test deno run -A scripts/test.ts",

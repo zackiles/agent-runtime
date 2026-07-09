@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+set -eu
+
+# Formats staged Deno-managed files before every commit so changes never carry
+# fmt drift. The CI quality gate (`deno task check`) runs `deno fmt`; without
+# this hook, a commit made from an unformatted tree lands unformatted and the
+# next contributor's `deno fmt` reformats unrelated files. See CONTRIBUTING.md.
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+if ! command -v deno >/dev/null 2>&1; then
+  echo "pre-commit: deno not found on PATH; skipping fmt." >&2
+  exit 0
+fi
+
+# Only files deno fmt handles, excluding the paths deno.jsonc excludes.
+staged=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -Ev '^(sdk-agent-nodejs|default-registry)/' \
+  | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|css|html)$' || true)
+
+[ -z "$staged" ] && exit 0
+
+if ! printf '%s\n' "$staged" | xargs deno fmt >/dev/null 2>&1; then
+  echo "pre-commit: deno fmt failed; fix the reported files and re-commit." >&2
+  exit 1
+fi
+
+printf '%s\n' "$staged" | xargs git add
