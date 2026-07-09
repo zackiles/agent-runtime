@@ -5,187 +5,38 @@ Full audit across `control-plane/`, `cli/`, `sdk-client-deno/`, `sdk-agent-nodej
 
 ---
 
-## HIGH
-
-### 1. Agent Deploy Endpoint Missing Authorization Check
-
-**File:** `control-plane/src/api/agents.ts:288-334`
-
-`POST /:id/deploy` never calls `canWriteAgent`. Every other mutation in this
-file checks it (`PUT`, `DELETE`, `PUT /version`, `POST /versions`,
-`DELETE /versions/:version`), and the equivalent registry deploy in
-`registry.ts` checks `canWrite`. This is an inconsistency — an authenticated
-tenant user could upload a source archive to another user's agent.
-
-The "create if not exists" behavior (lines 291-299) is intentional for CLI-first
-workflows where the agent record may not exist yet, and sets `createdBy` to the
-caller, which is fine. The gap is only when the agent **already exists** and
-belongs to someone else.
-
-**Fix:** When the agent already exists, check `canWriteAgent(tenantId,
-agent.id, email)` before allowing the upload. The create-if-missing path is fine
-as-is since it sets `createdBy: email`.
-
----
-
-### 2. Registry Clone Without Source Authorization
-
-**File:** `control-plane/src/api/registry.ts:125-134`
-
-`cloneEntity` calls `getEntity(table, sourceId, tenantId)` which fetches by
-`id + tenant_id` without checking visibility or ownership. If a user knows the
-UUID of another user's private tool/skill/rule, they can clone it.
-
-In practice, UUIDs are not exposed to non-owners through the list APIs (which
-filter by visibility), so exploitation requires guessing or leaking a UUID. But
-the inconsistency with `deploy` and `delete` (which both check `canWrite`) makes
-this worth fixing.
-
-**Fix:** Add `canRead(tenantId, table, id, email)` before cloning. This is
-consistent with the existing access model — public entities remain freely
-clonable, private ones require ownership or admin.
-
----
-
-### 3. Slack Identity Resolution IDOR
-
-**File:** `control-plane/src/api/bots/slack/identity.ts:8-14`
-
-`/resolve` uses `X-Slack-User-Email || sessionEmail`. On the SA bearer path,
-this header is verified against `slack_identity` in `slackBotAuth`, so the
-header is trustworthy there. On the cookie fallback path, any authenticated user
-can pass an arbitrary email and receive another user's Slack metadata.
-
-The data exposed (`slackUserId`, `slackTeamId`, `displayName`) is low
-sensitivity, but it's an unnecessary information leak.
-
-**Fix:** On the cookie-auth path, always use `sessionEmail`. Only honor
-`X-Slack-User-Email` when the request came through the SA bearer path. The
-middleware already sets different context for each path — use that distinction.
-
----
-
 ## MEDIUM
 
-### 4. OAuth `id_token` Not Verified on Callback
+### 6. Default Session Secret (partially addressed)
 
-**File:** `control-plane/src/api/auth.ts:55-58`
+**File:** `control-plane/src/session.ts`
 
-The `id_token` is decoded with `atob` without signature verification. However,
-the token comes directly from Google's token endpoint over a TLS-authenticated
-POST that includes the `client_secret`. This is a server-to-server call — not a
-client-supplied token. Google's OIDC spec explicitly permits skipping validation
-when the token is received directly from the token endpoint over TLS (see
-[OpenID Connect Core §3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation)).
+`AR_SESSION_SECRET` still falls back to `'ar-default-session-key'` for local dev.
+`getKey()` now throws when `!secret && K_SERVICE` is set, so Cloud Run cannot use
+the hardcoded key — but the check is **lazy** (on first session encode/decode),
+not a process startup guard. The service can still boot and serve `/health`
+before the missing secret is detected.
 
-The risk requires MITM on the TLS connection to `oauth2.googleapis.com`, which
-is extremely unlikely in a Cloud Run environment. Still worth adding for defense
-in depth, since `verifyJwt()` already exists in the same codebase.
-
-**Fix:** Reuse `verifyJwt()` from `middleware/auth.ts` to validate the
-`id_token`. Minimal effort for meaningful defense in depth.
-
----
-
-### 5. No `state` Parameter on OAuth Login (Login CSRF)
-
-**File:** `control-plane/src/api/auth.ts:16-25`
-
-No `state` parameter in the Google OAuth redirect. The practical impact is
-limited: an attacker could force a victim to log in under the attacker's Google
-account, but cannot use this to access the victim's data (the session is tied to
-whichever Google account completes the flow). The worst case is the victim
-unknowingly performing actions under the wrong identity.
-
-The Slack OAuth flow already uses signed `state` via `session.encode()`, so the
-pattern exists.
-
-**Fix:** Reuse the same `session.encode()`/`decode()` pattern from Slack OAuth.
-Generate a signed state cookie on `/login`, pass it as `state` to Google, and
-verify it on `/callback`.
-
----
-
-### 6. Default Session Secret
-
-**File:** `control-plane/src/session.ts:9`
-
-`AR_SESSION_SECRET` falls back to `'ar-default-session-key'` when unset. This is
-documented in `docs/iam.md` as a known insecure default that must be set in
-production. The deploy pipeline (`ar cp deploy`) always syncs secrets from
-`secrets.jsonc` to Secret Manager and sets them as env vars on Cloud Run, so
-production deployments should always have this set.
-
-The risk is a misconfigured deployment where the secret is accidentally omitted.
-
-**Fix:** At startup, when the process detects it is running on Cloud Run (check
-for `K_SERVICE` env var, which Cloud Run always sets), refuse to start if
-`AR_SESSION_SECRET` is not set. This is more reliable than checking `AR_MODE`
-since `K_SERVICE` is set by the platform itself and cannot be accidentally
-omitted.
-
----
-
-### 7. JWT Audience Not Enforced When `AR_AUDIENCE` Unset
-
-**File:** `control-plane/src/middleware/auth.ts:109-116`
-
-When `AR_AUDIENCE` is not set, any valid Google-signed JWT is accepted. In
-practice, the CLI sends identity tokens with the Cloud Run URL as audience
-(when using `--audiences`), and user-mode `gcloud` sends tokens with the gcloud
-client ID. The `AR_ALLOWED_DOMAINS` check still restricts which email domains
-are accepted.
-
-The audience check adds defense against token reuse from other services in the
-same org. Worth enforcing.
-
-**Fix:** Same approach as the session secret — when `K_SERVICE` is set (Cloud
-Run), derive the default audience from `K_SERVICE` + `K_REVISION` or the Cloud
-Run URL rather than silently skipping the check. For local development, audience
-enforcement can remain optional.
-
----
-
-### 8. Path Traversal on Static File Serving
-
-**File:** `control-plane/src/api/web.ts:20-24`, `web/mod.ts:267-279`
-
-The original assessment overstated this. HTTP clients and `new URL()` normalize
-`../` sequences **before** the request reaches the handler. A request like
-`GET /web/static/../../etc/passwd` is normalized to `GET /etc/passwd` by the
-HTTP layer, which no longer matches the `/web/static/*` route pattern, so the
-handler never runs.
-
-The remaining vector is percent-encoded dots (`%2e%2e/%2e%2e/`), which `new
-URL()` also resolves. Double-encoded slashes (`..%2F..%2F`) stay encoded but
-are treated as literal characters by the filesystem — `Deno.readFile` would look
-for a file literally named `..%2F..%2F...` inside `dist/`, which doesn't exist.
-
-The residual risk is low, but adding a `startsWith(dist)` check is trivial and
-eliminates any edge cases.
-
-**Fix:** After computing the full path, resolve it and verify
-`resolved.startsWith(dist)`. Return 403 if not. Trivial defense in depth.
+**Fix:** Move the `K_SERVICE`-gated check to process startup in
+`control-plane/src/mod.ts` so a misconfigured Cloud Run deployment fails fast
+rather than on the first authenticated request.
 
 ---
 
 ### 9. Unauthenticated Webhook Endpoint
 
-**File:** `control-plane/src/mod.ts:88-116`
+**File:** `control-plane/src/mod.ts`
 
 `POST /webhook/:id` is intentionally unauthenticated — webhooks from external
 systems (GitHub, Stripe, etc.) need to POST without a Google JWT. Security is
-based on the UUID being unguessable (UUID v4 = 122 bits of entropy).
+based on the UUID being unguessable (UUID v4 = 122 bits of entropy). `agentId`
+has been removed from the response, but the endpoint still has no HMAC
+verification or rate limiting, and the handler still only acknowledges receipt
+rather than invoking the agent.
 
-The response leaks `agentId` and `webhookId`, but these are already known to the
-webhook creator. The larger concern is that the handler currently doesn't
-actually invoke the agent — it just acknowledges receipt. When invocation is
-added, HMAC verification should be considered.
-
-**Fix:** Remove `agentId` from the response (the caller doesn't need it). When
-agent invocation is added, implement optional per-webhook HMAC verification
-(configurable since not all webhook providers support signing). Consider rate
-limiting by webhook ID.
+**Fix:** When agent invocation is added, implement optional per-webhook HMAC
+verification (configurable since not all webhook providers support signing).
+Consider rate limiting by webhook ID.
 
 ---
 
@@ -210,10 +61,10 @@ given the `Secure`/`HttpOnly`/`SameSite=Lax` flags and the Cloud Run TLS model.
 
 ### 11. Markdown Preview XSS via Code Fence Content
 
-**File:** `web/src/islands/agents.tsx:1422-1479`
+**File:** `web/src/components/editor.tsx` (moved from `web/src/islands/agents.tsx`)
 
-The `renderMarkdown` function escapes `<`, `>`, `&` globally **first** (lines
-1423-1426), then the code-fence regex captures from the already-escaped string.
+The `renderMarkdown` function escapes `<`, `>`, `&` globally **first**, then the
+code-fence regex captures from the already-escaped string.
 Because `<` is already `&lt;` before the regex runs, a code fence containing
 `</code><img onerror=...>` would actually be captured as
 `&lt;/code&gt;&lt;img...` — which renders as harmless text, not executable HTML.
@@ -252,7 +103,7 @@ as a safeguard against future reuse. No urgency since the input is self-authored
 
 ### 13. Tenant Not Bound to User Identity
 
-**File:** `control-plane/src/middleware/tenant.ts:11-16`
+**File:** `control-plane/src/middleware/tenant.ts`
 
 This is by design. `docs/iam.md` explicitly states: "There is no per-tenant
 authorization gate — any authenticated user can access any tenant by setting the
@@ -263,10 +114,15 @@ authenticate at all. Within an allowed domain, all users can access all tenants.
 This is appropriate for an internal-org tool where tenants represent
 environments (dev, staging, prod) rather than separate customers.
 
-If multi-org tenancy is needed in the future, this becomes a genuine requirement.
+**Now tracked as the Critical "Tenant isolation bypass via `X-Tenant` header"
+item in `TODO.md`**, which documents the web-vs-API membership asymmetry
+(`webAuth` gates on `getUser` while the API path auto-provisions via `ensure`),
+the recommended membership-gate fix, and its tradeoffs. Retained here as the
+security-audit record; see `TODO.md` for the actionable plan.
 
-**Fix:** No action needed for current use case. If multi-org tenancy is added,
-implement a `tenant_member` table and check membership in `resolveTenant`.
+**Fix:** No action needed for the current environments-as-tenants use case. If
+multi-org tenancy is added, implement a `tenant_member` table and check
+membership in `resolveTenant` (see `TODO.md`).
 
 ---
 
@@ -307,63 +163,36 @@ resource/scope.
 
 ---
 
-### 16. Secrets Exposed in Cloud Run Env Vars and CLI Args
+### 16. Secrets Exposed in Cloud Run Env Vars (control-plane deploy)
 
-**Files:** `cli/src/commands/control-plane.ts:663-669`,
-`cli/src/commands/bot.ts:214-226`
+**File:** `cli/src/commands/control-plane.ts`
 
-`syncSecrets` correctly uses `gcloud secrets versions add --data-file=-` with
-stdin — secret values never appear in argv there. However, the deploy step
-writes all resolved secrets into `env.yaml` and uses `--env-vars-file`, so the
-control plane receives secrets as plain env vars (visible in GCP Console and
-`gcloud` output). The agent deploy path uses `--set-secrets` (Secret Manager
-refs) — the control plane path is weaker than that.
+The `bot.ts` half of this item is now **fixed** — `cli/src/commands/bot.ts`
+syncs Slack credentials to Secret Manager and mounts them via `--set-secrets`,
+passing only the non-secret `AR_BOT_NAME` through `--update-env-vars`.
 
-`bot.ts` is worse: it passes Slack tokens directly in `--update-env-vars=...`
-CLI arguments, exposing them in process listings and shell history.
+The control-plane deploy path is still weaker: it resolves secret values into
+`env.yaml` and passes `--env-vars-file`, so the control plane receives secrets
+as plain env vars (visible in GCP Console and `gcloud` output), unlike the agent
+deploy path which uses `--set-secrets` (Secret Manager refs).
 
-**Fix:** For `bot.ts`, use `--set-secrets` or `--update-secrets` with Secret
-Manager references instead of `--update-env-vars` with raw values. For the
-control plane, consider migrating to `--set-secrets` for sensitive values
-(OAuth secrets, session secret, Slack credentials) while keeping non-sensitive
-config in env vars.
+**Fix:** Migrate the control-plane deploy to `--set-secrets` for sensitive
+values (OAuth secrets, session secret, Slack credentials) while keeping
+non-sensitive config in env vars.
 
 ---
 
-### 17. No CSP or Security Headers
+### 17. No Content-Security-Policy Header (partially addressed)
 
-**File:** `web/mod.ts:115-259`
+**File:** `control-plane/src/api/web.ts`
 
-The HTML shell has no `Content-Security-Policy`, `X-Frame-Options`,
-`X-Content-Type-Options`, `Referrer-Policy`, or `Permissions-Policy` headers.
-Cloud Run does not add these automatically. The server-rendered HTML does use
-`escScript` and `escAttr` for user data, which reduces XSS risk, but CSP
-provides defense in depth against script injection from other sources.
+The three minimum headers are now set on HTML shell responses
+(`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`). What remains is a
+`Content-Security-Policy` — it is not set anywhere in the repo.
 
-**Fix:** Add security headers in the `renderPage` response. At minimum:
-`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
-`Referrer-Policy: strict-origin-when-cross-origin`. A `Content-Security-Policy`
-with `default-src 'self'` can be added when the inline script in the shell is
-moved to a nonce or external file.
-
----
-
-### 18. System Reset Has No Confirmation
-
-**File:** `control-plane/src/api/system/routes.ts:108-180`
-
-`POST /reset` is admin-only and behind `apiAuth`. For cookie-authenticated
-requests, `SameSite=Lax` prevents cross-site POST from sending the session
-cookie, which mitigates classical CSRF. The remaining risk is a same-site
-attacker, a leaked Bearer token, or a compromised admin account.
-
-Given the destructive nature (deletes all GCS objects, demos, and the SQLite
-database), a confirmation body adds meaningful protection against accidental or
-scripted misuse.
-
-**Fix:** Require a confirmation body: `{"confirm": "RESET-<tenantId>"}`. This
-prevents accidental invocation and scripted attacks that don't know the tenant
-ID in advance.
+**Fix:** Add a `Content-Security-Policy` with `default-src 'self'` once the
+inline script in the shell is moved to a nonce or external file.
 
 ---
 
@@ -440,21 +269,6 @@ the current behavior is correct and restrictive.
 
 ---
 
-### 23. Demo Services Visibility Naming
-
-**File:** `control-plane/src/api/demos/deploy.ts:91-124`
-
-"Private" demos get `allAuthenticatedUsers` (any Google account), "public" gets
-`allUsers`. This is by design — demos are meant to be preview environments with
-broad access. The word "private" is misleading but the behavior matches the
-demo use case (semi-public preview, not tenant-private isolation).
-
-**Fix:** LOW priority. Consider renaming "private" to "authenticated" in the UI
-and API to set correct expectations. The current IAM behavior is intentional
-for the demo feature.
-
----
-
 ### 24. Config Defaults Override Environment Variables
 
 **File:** `sdk-client-deno/src/config.ts:426-431`
@@ -526,19 +340,19 @@ properties.
 
 ### 28. `agent_edge.ref_type` Used as Table Name in SQL
 
-**File:** `sdk-client-deno/src/db/copy.ts:134-136`
+**File:** `sdk-client-deno/src/db/copy.ts`
 
-The dynamic SQL only runs for `ref_type` values of `skill` or `rule` (lines
-126-131 branch on known types). Other `ref_type` values hit a generic branch
-that does not use dynamic table names. Inserts into `agent_edge` come from
-controlled code paths in `agents.ts`, not raw HTTP input.
+The dynamic SQL only runs for `ref_type` values of `skill` or `rule` (the branch
+guards on known types). The execute path (`copyRegistryEntity`/`copyConfig`) now
+calls `assertValidTable()`, but `plan()` still builds `` `SELECT * FROM
+${edge.refType} ...` `` without that allowlist check. Inserts into `agent_edge`
+come from controlled code paths, not raw HTTP input.
 
 An invalid table name would cause a SQLite error, not data leakage. This is
 a defense-in-depth concern, not an exploitable injection.
 
-**Fix:** LOW priority. Add an allowlist check before the dynamic query for
-clarity, but the current branching logic already limits which values reach the
-dynamic SQL.
+**Fix:** LOW priority. Call `assertValidTable()` in `plan()` too, for
+consistency with the execute path.
 
 ---
 
@@ -569,21 +383,6 @@ will fail HMAC).
 
 **Fix:** LOW priority. Add `if (isNaN(ts)) return false` for spec compliance
 with Slack's reference implementation. Not exploitable in practice.
-
----
-
-### 31. Slack `/verify` User Enumeration
-
-**File:** `control-plane/src/api/bots/slack/identity.ts:40-112`
-
-Behind `slackBotAuth`. On the cookie path, an authenticated internal user can
-probe whether other org emails are enrolled in Slack integration. In an org
-where everyone shares the same Slack workspace, enrollment status is not
-meaningfully sensitive.
-
-**Fix:** LOW priority. If enrollment status is sensitive, restrict
-`X-Slack-User-Email` to the SA bearer path only. For most internal deployments,
-this is not a meaningful information leak.
 
 ---
 
@@ -675,20 +474,6 @@ BigQuery).
 
 ---
 
-### 38. First-User Admin Race Condition
-
-**File:** `sdk-client-deno/src/db/users.ts:25-36`
-
-`ensure()` is fully synchronous (no `await`), so on a single Deno worker, two
-requests cannot interleave the SELECT/COUNT/INSERT sequence. The documented
-`maxInstances: 1` in `default-settings.jsonc` prevents multiple Cloud Run
-instances with separate DB files. SQLite serializes writes within a process.
-
-**Fix:** Only relevant if `maxInstances` is raised above 1 or `ensure()` becomes
-async. Under the current deployment model, this race cannot occur.
-
----
-
 ### 39. CI Actions Pinned to Major Version Tags
 
 **Files:** `.github/workflows/ci.yml`, `release.yml`, `test-deno.yml`
@@ -733,14 +518,16 @@ security-gating concern in the current usage patterns.
 
 ---
 
-### 42. DB Sync Uploads Entire SQLite File
+### 42. Cross-Tenant Copy Co-Mingles Rows Before Sync
 
-**File:** `sdk-client-deno/src/db/sync.ts:21-34`
+**File:** `sdk-client-deno/src/db/sync.ts`, `sdk-client-deno/src/db/copy.ts`
 
-Cross-tenant copy inserts rows with `tenant_id = targetTenant` into the source
-tenant's SQLite file. When that file is synced to GCS, it contains both tenants'
-data. This is consistent with the documented tenant model (see `docs/iam.md`)
-where tenant isolation is logical, not physical.
+Each tenant now has its own SQLite file (`${tenantId}.db`), and `sync.ts` uploads
+that whole file to GCS. Cross-tenant copy, however, still writes rows with
+`tenant_id = targetTenant` into the request's active (source) DB via `getDb()`,
+then runs `scheduleSync(targetTenant)`. So a copy can transiently place the
+target tenant's rows in the source tenant's file. This is consistent with the
+documented logical-tenant model (see `docs/iam.md`).
 
 **Fix:** Only relevant if the tenant model changes to require strict physical
 isolation. Under the current model, this is expected behavior.
@@ -757,46 +544,35 @@ untrusted location.
 
 ---
 
-### 44. Tenant Not Bound to User Identity
-
-Documented in `docs/iam.md`. Tenants represent environments, not customer
-isolation boundaries. `AR_ALLOWED_DOMAINS` restricts which domains can
-authenticate. No action needed unless multi-org tenancy is added.
-
----
-
-### 45. Cross-Tenant Copy Without Target Authorization
-
-Consistent with the tenant model above. A code comment has been added to
-`control-plane/src/api/copy.ts`. No action needed unless the tenant model
-changes.
+> Items #13 (tenant not bound to user identity) and #14 (cross-tenant copy) are
+> the remaining by-design tenant-model notes; #13 is also tracked as a Critical
+> item in `TODO.md`. The previous INFO duplicates of these (former #44/#45) were
+> removed.
 
 ---
 
 ## Priority Order
 
+Items #1–#5, #7, #8, #18, #23, #31, and #38 have been resolved or are no longer
+applicable and were removed. Numbering of the remaining items is preserved so
+existing cross-references stay valid.
+
 **Before next deploy:**
 
-- [ ] Add `canWriteAgent` to deploy endpoint (#1)
-- [ ] Fix registry clone auth (#2)
-- [ ] Fix Slack identity IDOR (#3)
 - [ ] Sign access callback context (#15)
-- [ ] Verify `id_token` on OAuth callback (#4)
-- [ ] Add `state` to OAuth login (#5)
-- [ ] Guard session secret on Cloud Run via `K_SERVICE` (#6)
-- [ ] Guard audience on Cloud Run via `K_SERVICE` (#7)
+- [ ] Move the Cloud Run session-secret guard to startup (#6)
 
 **Short-term:**
 
-- [ ] Migrate bot secrets to `--set-secrets` (#16)
-- [ ] Add CSP + security headers (#17)
-- [ ] Add system reset confirmation body (#18)
+- [ ] Migrate control-plane deploy secrets to `--set-secrets` (#16)
+- [ ] Add a `Content-Security-Policy` header (#17)
 - [ ] Non-root Docker + explicit permissions (#19)
 - [ ] Sanitize 5xx error responses (#20)
-- [ ] Use `PASSTHROUGH_VARS` for tool install scripts (#21)
+- [ ] Use `PASSTHROUGH_VARS` for tool install scripts + throw on missing
+      binary (#21)
 
 **When convenient:**
 
-- [ ] All LOW items (#22–31, #32–42) — code quality, defense in depth,
-      and future-proofing improvements. None are actively exploitable in the
-      current deployment model.
+- [ ] Remaining LOW / by-design items — code quality, defense in depth, and
+      future-proofing. None are actively exploitable in the current deployment
+      model.
