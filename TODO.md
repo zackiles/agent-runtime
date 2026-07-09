@@ -28,7 +28,7 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       tools, audit logs, and telemetry.
 
   **Currently documented as intentional** (`docs/iam.md` → "Tenant Isolation",
-  `SECURITY-TODO.md` #13/#44): tenants are modelled as environments
+  `SECURITY-TODO.md` #13): tenants are modelled as environments
   (`dev`/`staging`/`prod`) within one org, isolation is logical (separate
   SQLite DB + `{tenantId}/` GCS prefix), and the real trust boundary is
   `AR_ALLOWED_DOMAINS` + Google-verified identity. It is left open for the
