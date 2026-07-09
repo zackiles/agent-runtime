@@ -116,13 +116,19 @@ prerequisite for deciding where to sign:
 
 The top-level `Dockerfile` is **not built by any workflow step or CLI
 command** — `release.yml` builds `Dockerfile.agent-base`, and `ar cp deploy`
-writes its own Dockerfile to a staging directory
-(`cli/src/commands/control-plane.ts:144-155`, `:287`). It is not orphaned
-from tooling config, though: `.gcloudignore:2` un-ignores it (`!Dockerfile`)
-and `CONTRIBUTING.md:107` still documents it as the "Production container
-image". It runs as root with `deno run -A` and is the subject of
-`SECURITY-TODO.md` #19. This RFC recommends deleting it, along with those two
-references, rather than maintaining it (§4.2).
+writes its own Dockerfile to a staging directory (the `DOCKERFILE` const at
+`cli/src/commands/control-plane.ts:144-155`, written by `prepareStagingDir` at
+`:287`). The only lingering reference is `CONTRIBUTING.md:107`, which still
+(stalely) documents it as the "Production container image". It runs as root
+with `deno run -A` and is the subject of `SECURITY-TODO.md` #19. This RFC
+recommends deleting it and updating that doc line (§4.2).
+
+`.gcloudignore:2` (`!Dockerfile`) is **not** related to this file and must
+stay: `prepareStagingDir` (`control-plane.ts:287-292`) writes a _generated_
+Dockerfile into the CP deploy staging dir and copies the repo `.gcloudignore`
+alongside it. Because that ignore file starts with `*`, the `!Dockerfile`
+exception is what lets `gcloud run deploy --source=<staging>` upload the
+generated Dockerfile; removing it breaks `ar cp deploy`.
 
 ### Gaps found in the audit
 
@@ -139,7 +145,7 @@ references, rather than maintaining it (§4.2).
 | Cloud Build builders                 | `gcr.io/cloud-builders/docker`, `ubuntu` (per-agent), `bash` (demos) referenced by tag                                                                                                                                                                                      | Not digest-pinned                                       |
 | `install.sh` execution in base image | Runs every tool's script as root                                                                                                                                                                                                                                            | Any compromised tool gets root                          |
 | `install.sh` external fetches        | `curl` to `downloads.cursor.com` etc. with no checksum                                                                                                                                                                                                                      | CDN/DNS compromise → base image                         |
-| Unused top-level `Dockerfile`        | Exists, pins `denoland/deno:2.1.4` by tag, runs as root with `-A`; kept alive only by `.gcloudignore:2` and `CONTRIBUTING.md:107`                                                                                                                                           | Developer-bait for a future production build path       |
+| Unused top-level `Dockerfile`        | Exists, pins `denoland/deno:2.1.4` by tag, runs as root with `-A`; only `CONTRIBUTING.md:107` still references it (`.gcloudignore`'s `!Dockerfile` is for the CP staging dir, not this file)                                                                                | Developer-bait for a future production build path       |
 
 ---
 
@@ -230,8 +236,11 @@ five categories:
 Change every `FROM owner/image:tag` to `FROM owner/image:tag@sha256:<digest>`.
 Delete the unused top-level `Dockerfile` as part of the same PR — it's
 subject to `SECURITY-TODO.md` #19 and confusing to new contributors who
-assume production uses it — and remove its two dangling references
-(`.gcloudignore:2` `!Dockerfile`, `CONTRIBUTING.md:107`).
+assume production uses it — and update the stale `CONTRIBUTING.md:107`
+reference. **Leave `.gcloudignore`'s `!Dockerfile` line intact**: it
+un-ignores the _generated_ Dockerfile that `prepareStagingDir` writes into
+the CP deploy staging dir (`control-plane.ts:287-292`), so removing it breaks
+`ar cp deploy`.
 
 The TS string-literal Dockerfiles (`demos/build.ts` — both the exported
 consts and the heredocs inside `generateDockerfileScript()`; the
@@ -314,8 +323,12 @@ Enable on `main`:
 
 - Require PR before merge
 - Require `CI / check` and `Test Deno / test` to pass
-- Restrict push of `v[0-9]+.[0-9]+.[0-9]+` tags to Release Managers
-  (pushing a tag triggers `release.yml`)
+- Restrict push of `v[0-9]+.[0-9]+.[0-9]+` tags to Release Managers **and the
+  release workflow's `github-actions[bot]` identity**. `release.yml:127-131`
+  creates and pushes `vX.Y.Z` itself on semantic commits to `main`, so a
+  ruleset that omits the bot would fail every auto-release at the _Create tag_
+  step. (Alternatively, move releases to a human tag-push trigger and drop the
+  bot's tag creation.)
 - Dismiss stale reviews on new commits
 
 We **do not** require signed commits: it conflicts with
@@ -433,13 +446,16 @@ verify. Two-tier plan:
 2. Add an opt-out `AR_VERIFY=0` for air-gapped users; default `AR_VERIFY=1`
    after two weeks of bake.
 
-`skill/install.sh` is a different shape: it `curl`s `skill/SKILL.md`
-(a markdown doc) from `raw.githubusercontent.com/.../main/` and writes it
-into `~/.claude` and `~/.cursor` — no binary, no release artifact. Signature
-verification of a release blob does not map cleanly. Lower-priority options:
-pin to a tagged raw URL and verify a cosign-signed `SKILL.md.sha256`, or
-accept the residual risk since the payload is inert text executed by nothing.
-Release notes document the manual binary verification command.
+`skill/install.sh` is a different shape but **not** lower risk: it `curl`s
+`skill/SKILL.md` from `raw.githubusercontent.com/.../main/` and writes it into
+`~/.claude/skills/.../SKILL.md` and `~/.cursor/skills/.../SKILL.md`, where
+Claude Code and Cursor load it as **agent instructions**. The payload is not
+inert — a replaced `SKILL.md` can steer tool use or exfiltrate data — so an
+unverified fetch here is a live `curl | sh`-class channel. Fix it the same way
+as the binary: pin the fetch to a release tag rather than `main`, publish a
+cosign-signed checksum (or bundle) over `SKILL.md` in the release, and have
+`install.sh` verify it before writing the file. Release notes document the
+manual verification command.
 
 ---
 
@@ -535,8 +551,14 @@ Common hardening:
    against the Cloud Build SA identity. Signatures feed §4.13's
    verification.
 4. **Digest-pin Cloud Build builder images** (`gcr.io/cloud-builders/docker`,
-   `ubuntu`, `bash`) in every `steps[].name` emitted by the CP. Same change
-   as §4.2 for base images, different files.
+   `ubuntu`, `bash`) in every `steps[].name` the CP emits — but note this only
+   covers the **agent and demo** builds. The control-plane image build takes
+   the `gcloud run deploy --source=<staging>` path
+   (`control-plane.ts:1055-1077`), where Cloud Build auto-detects the staged
+   Dockerfile and the CP emits no `steps[].name` to pin. Either switch CP
+   deploy to an explicit `cloudbuild.yaml` with pinned builders, or accept it
+   as documented residual risk — the CP image `FROM` itself is still
+   digest-pinned via §4.2.
 
 ---
 
@@ -559,7 +581,13 @@ Implement in the existing paths:
 
 - `cli/src/commands/control-plane.ts` — `buildBaseImage` and
   `deployControlPlane`
-- `control-plane/src/api/agents.ts` — before Cloud Run deploy
+- `control-plane/src/api/agents.ts` — verify the release-signed **base**
+  digest _before_ submitting the Cloud Build that writes `FROM ${baseTag}`
+  (`:550-590`). A check placed only before the Cloud Run deploy (`:634`) is
+  too late: by then the base has already been pulled into and baked onto the
+  child image, and a Cloud Build signing step would happily sign the trojaned
+  child, so T4 survives. Verify the produced child image separately, before
+  `containerDeploy`.
 
 **Layer 2 — Binary Authorization admission.** Enforce at the Cloud Run
 admission layer using a **sigstore / Fulcio attestor** (not PGP):
@@ -664,9 +692,10 @@ rg 'FROM (node|denoland/deno|nginx|debian)' control-plane/src/api/demos/build.ts
 rg '"baseImage"' default-settings.jsonc
 # Expected: each value contains '@sha256:'
 
-# Dead Dockerfile and its dangling references are gone
+# Dead Dockerfile is gone. NB: keep .gcloudignore's `!Dockerfile` — it is for
+# the CP deploy staging dir (control-plane.ts:287-292), not this file.
 test ! -f Dockerfile && echo ok
-rg -q '!Dockerfile' .gcloudignore || echo 'gcloudignore clean'
+rg -q '^!Dockerfile$' .gcloudignore && echo 'gcloudignore exception still present (correct)'
 ```
 
 ### After Phase 2
