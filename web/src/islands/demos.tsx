@@ -170,6 +170,13 @@ export function Demos() {
       : ''
   }
 
+  // A slug alone no longer identifies a demo: a caller can hold both their own
+  // `foo` and a `foo` shared by someone else. Match on owner + slug so state
+  // updates only touch the card that was actually acted on.
+  function sameDemo(a: DemoMeta, b: DemoMeta): boolean {
+    return a.name === b.name && (a.createdBy || '') === (b.createdBy || '')
+  }
+
   async function streamAgent<T>(
     url: string,
     body: Record<string, unknown>,
@@ -337,7 +344,7 @@ export function Demos() {
       const url = result.url || demo.url
       setDemos((prev) =>
         prev.map((d) =>
-          d.name === demo.name
+          sameDemo(d, demo)
             ? {
               ...d,
               url,
@@ -365,7 +372,7 @@ export function Demos() {
       })
       await checkedJson(res)
       setDemos((prev) =>
-        prev.map((d) => d.name === demo.name ? { ...d, status: 'stopped' } : d)
+        prev.map((d) => sameDemo(d, demo) ? { ...d, status: 'stopped' } : d)
       )
       flash(`Demo "${demo.name}" stopped.`)
     } catch (err) {
@@ -385,7 +392,7 @@ export function Demos() {
         method: 'DELETE',
       })
       await checkedJson(res)
-      setDemos((prev) => prev.filter((d) => d.name !== demo.name))
+      setDemos((prev) => prev.filter((d) => !sameDemo(d, demo)))
       flash(`Demo "${demo.name}" deleted.`)
     } catch (err) {
       flash(
@@ -507,23 +514,25 @@ export function Demos() {
         )
         : (
           <div class='space-y-3'>
-            {demos.map((demo) => (
-              <DemoCard
-                key={`${demo.createdBy || ''}:${demo.name}`}
-                demo={demo}
-                expanded={expanded === demo.name}
-                onToggle={() =>
-                  setExpanded(expanded === demo.name ? null : demo.name)}
-                onDeploy={(v) => handleDeploy(demo, v)}
-                onStop={() => handleStop(demo)}
-                onDelete={() => handleDelete(demo)}
-                onDownload={() => handleDownload(demo)}
-                onFeedback={() => startFeedback(demo)}
-                flash={flash}
-                userEmail={user.email}
-                isAdmin={user.isAdmin}
-              />
-            ))}
+            {demos.map((demo) => {
+              const key = `${demo.createdBy || ''}:${demo.name}`
+              return (
+                <DemoCard
+                  key={key}
+                  demo={demo}
+                  expanded={expanded === key}
+                  onToggle={() => setExpanded(expanded === key ? null : key)}
+                  onDeploy={(v) => handleDeploy(demo, v)}
+                  onStop={() => handleStop(demo)}
+                  onDelete={() => handleDelete(demo)}
+                  onDownload={() => handleDownload(demo)}
+                  onFeedback={() => startFeedback(demo)}
+                  flash={flash}
+                  userEmail={user.email}
+                  isAdmin={user.isAdmin}
+                />
+              )
+            })}
           </div>
         )}
     </div>
