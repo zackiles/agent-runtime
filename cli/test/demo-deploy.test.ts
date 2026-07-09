@@ -98,15 +98,17 @@ Deno.test('destroyContainer accepts userId parameter', async () => {
   assertStringIncludes(sig![0], 'userId')
 })
 
-Deno.test('routes.ts passes userId to destroyContainer', async () => {
+Deno.test('routes.ts scopes destroyContainer to the resolved demo owner', async () => {
   const routes = await Deno.readTextFile(
     join(ROOT, 'control-plane/src/api/demos/routes.ts'),
   )
 
+  // Shared editors act under the owner's storage/service scope, so the
+  // resolved ownerId — not the caller's email — is passed as the userId.
   assertEquals(
-    routes.includes('destroyContainer(cfg, tenantId, email, name)'),
+    routes.includes('destroyContainer(cfg, tenantId, ownerId,'),
     true,
-    'routes.ts must pass email as userId to destroyContainer',
+    'routes.ts must pass the resolved owner as userId to destroyContainer',
   )
 })
 

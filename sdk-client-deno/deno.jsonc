@@ -19,6 +19,7 @@
     "./db/tools": "./src/db/tools.ts",
     "./db/users": "./src/db/users.ts",
     "./db/slack": "./src/db/slack.ts",
+    "./db/demo-shares": "./src/db/demo-shares.ts",
     "./config": "./src/config.ts",
     "./mode": "./src/mode.ts",
     "./runtime": "./src/runtime.ts",

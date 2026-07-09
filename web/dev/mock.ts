@@ -278,12 +278,77 @@ async function handleAgentRoutes(
   return false
 }
 
+const mockShares: Record<
+  string,
+  Array<{
+    ownerId: string
+    slug: string
+    memberId: string
+    role: 'viewer' | 'editor'
+    grantedBy: string
+    createdAt: string
+  }>
+> = (loadFixture('demo-shares') as Record<string, never>) ?? {}
+
+const mockMembers = [
+  { id: 'dev@local', name: 'Dev Local', isAdmin: true },
+  { id: 'alice@local', name: 'Alice', isAdmin: false },
+  { id: 'bob@local', name: 'Bob', isAdmin: false },
+]
+
 async function handleDemoRoutes(
   req: Connect.IncomingMessage,
   res: Connect.ServerResponse,
 ): Promise<boolean> {
   const { path } = parseUrl(req.url || '')
   const method = req.method || 'GET'
+
+  if (method === 'GET' && /^\/api\/demos\/members\/?$/.test(path)) {
+    stubJson(res, mockMembers)
+    return true
+  }
+
+  const sharesMatch = path.match(/^\/api\/demos\/([^/]+)\/shares\/?$/)
+  if (sharesMatch) {
+    const slug = decodeURIComponent(sharesMatch[1])
+    if (method === 'GET') {
+      stubJson(res, { owner: 'dev@local', shares: mockShares[slug] ?? [] })
+      return true
+    }
+    if (method === 'POST') {
+      const raw = await readBody(req)
+      const data = JSON.parse(raw || '{}')
+      const role = data.role === 'editor' ? 'editor' : 'viewer'
+      const list = mockShares[slug] ?? (mockShares[slug] = [])
+      const existing = list.find((s) => s.memberId === data.member)
+      if (existing) existing.role = role
+      else {
+        list.push({
+          ownerId: 'dev@local',
+          slug,
+          memberId: data.member,
+          role,
+          grantedBy: 'dev@local',
+          createdAt: new Date().toISOString(),
+        })
+      }
+      stubJson(res, { ok: true, member: data.member, role })
+      return true
+    }
+  }
+
+  const shareMemberMatch = path.match(
+    /^\/api\/demos\/([^/]+)\/shares\/([^/]+)\/?$/,
+  )
+  if (method === 'DELETE' && shareMemberMatch) {
+    const slug = decodeURIComponent(shareMemberMatch[1])
+    const member = decodeURIComponent(shareMemberMatch[2])
+    mockShares[slug] = (mockShares[slug] ?? []).filter(
+      (s) => s.memberId !== member,
+    )
+    stubJson(res, { ok: true })
+    return true
+  }
 
   if (method === 'GET' && /^\/api\/demos\/?$/.test(path)) {
     stubJson(
@@ -301,6 +366,8 @@ async function handleDemoRoutes(
           createdBy: 'dev@local',
           status: 'running',
           visibility: 'public',
+          role: 'owner',
+          accessUrl: 'https://demo-dev-sample-dashboard.run.app',
         },
         {
           name: 'landing-page',
@@ -313,6 +380,22 @@ async function handleDemoRoutes(
           createdBy: 'dev@local',
           status: 'created',
           visibility: 'private',
+          role: 'owner',
+          accessUrl: '/web/d/landing-page',
+        },
+        {
+          name: 'bean-scene',
+          url: 'https://demo-dev-bean-scene.run.app',
+          path: '/tmp/demos/bean-scene',
+          prompt: 'A coffee shop ordering demo',
+          summary: 'Shared with you by alice@local.',
+          createdAt: '2025-06-04T09:00:00Z',
+          updatedAt: '2025-06-04T12:00:00Z',
+          createdBy: 'alice@local',
+          status: 'running',
+          visibility: 'private',
+          role: 'editor',
+          accessUrl: '/web/d/bean-scene?owner=alice%40local',
         },
       ],
     )

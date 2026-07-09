@@ -1,6 +1,6 @@
 # RFC-010: Demo Sharing — Viewers and Editors
 
-**Status:** Proposed **Authors:** Agent Runtime Team **Created:** 2026-07-09
+**Status:** Implemented **Authors:** Agent Runtime Team **Created:** 2026-07-09
 **Depends on:** RFC-007 (demo serve architecture), RFC-005 (Slack demo command)
 
 ---
@@ -175,15 +175,15 @@ Every action on a demo maps to a required role. `owner` is the demo's creator
 
 | Capability                                | Owner | Editor | Viewer | Admin |
 | ----------------------------------------- | :---: | :----: | :----: | :---: |
-| View running demo (`/web/d/{slug}`)       |   ✅   |   ✅    |   ✅    |   ✅   |
-| List / see metadata (`GET /:name`)        |   ✅   |   ✅    |   ✅    |   ✅   |
-| Download source (`/download`, `/archive`) |   ✅   |   ✅    |   ❌    |   ✅   |
-| Update via feedback (`/update`)           |   ✅   |   ✅    |   ❌    |   ✅   |
-| Deploy / stop (`/deploy`, `/stop`)        |   ✅   |   ✅    |   ❌    |   ✅   |
-| Change visibility                         |   ✅   |   ✅    |   ❌    |   ✅   |
-| Manage shares (invite / remove)           |   ✅   |   ✅    |   ❌    |   ✅   |
-| Delete demo (`DELETE /:name`)             |   ✅   |   ⚠️    |   ❌    |   ✅   |
-| Remove the owner / transfer ownership     |   ❌   |   ❌    |   ❌    |   ✅   |
+| View running demo (`/web/d/{slug}`)       |  ✅   |   ✅   |   ✅   |  ✅   |
+| List / see metadata (`GET /:name`)        |  ✅   |   ✅   |   ✅   |  ✅   |
+| Download source (`/download`, `/archive`) |  ✅   |   ✅   |   ❌   |  ✅   |
+| Update via feedback (`/update`)           |  ✅   |   ✅   |   ❌   |  ✅   |
+| Deploy / stop (`/deploy`, `/stop`)        |  ✅   |   ✅   |   ❌   |  ✅   |
+| Change visibility                         |  ✅   |   ✅   |   ❌   |  ✅   |
+| Manage shares (invite / remove)           |  ✅   |   ✅   |   ❌   |  ✅   |
+| Delete demo (`DELETE /:name`)             |  ✅   |   ⚠️   |   ❌   |  ✅   |
+| Remove the owner / transfer ownership     |  ❌   |   ❌   |   ❌   |  ✅   |
 
 The intent stated in the feature request is that an editor can "do anything else
 that the owner could." Editors are therefore a full delegation of the owner's
@@ -279,13 +279,13 @@ CREATE INDEX IF NOT EXISTS demo_share_demo
   ON demo_share (tenant_id, owner_id, slug);
 ```
 
-| Column       | Meaning                                                        |
-| ------------ | -------------------------------------------------------------- |
-| `owner_id`   | Email that scopes the demo's storage/service (the creator)     |
-| `slug`       | Demo slug (`slugify`'d, matches `demo.json` `name`)            |
-| `member_id`  | Email the demo is shared with (grantee)                        |
-| `role`       | `viewer` or `editor`                                           |
-| `granted_by` | Email that created this grant (owner, an editor, or an admin)  |
+| Column       | Meaning                                                       |
+| ------------ | ------------------------------------------------------------- |
+| `owner_id`   | Email that scopes the demo's storage/service (the creator)    |
+| `slug`       | Demo slug (`slugify`'d, matches `demo.json` `name`)           |
+| `member_id`  | Email the demo is shared with (grantee)                       |
+| `role`       | `viewer` or `editor`                                          |
+| `granted_by` | Email that created this grant (owner, an editor, or an admin) |
 
 The `demo_share_member` index powers the "shared with me" query
 (`WHERE member_id = ?`); the `demo_share_demo` index powers "who is this demo
@@ -307,10 +307,20 @@ type DemoShare = {
 }
 
 function upsert(tenantId: string, share: Omit<DemoShare, 'createdAt'>): void
-function remove(tenantId: string, ownerId: string, slug: string, memberId: string): void
+function remove(
+  tenantId: string,
+  ownerId: string,
+  slug: string,
+  memberId: string,
+): void
 function forMember(tenantId: string, memberId: string): DemoShare[]
 function forDemo(tenantId: string, ownerId: string, slug: string): DemoShare[]
-function role(tenantId: string, ownerId: string, slug: string, memberId: string): 'viewer' | 'editor' | null
+function role(
+  tenantId: string,
+  ownerId: string,
+  slug: string,
+  memberId: string,
+): 'viewer' | 'editor' | null
 
 export { forDemo, forMember, remove, role, upsert }
 export type { DemoShare }
@@ -453,12 +463,12 @@ now written through.
 All routes are mounted under both `/api/demos` (identity auth) and `/demos`
 (`control-plane/src/mod.ts`). New endpoints:
 
-| Method + path                        | Auth role     | Body / query                     | Purpose                                              |
-| ------------------------------------ | ------------- | -------------------------------- | ---------------------------------------------------- |
-| `GET /:name/shares`                  | owner/editor/admin | `?owner=` (disambiguation)   | List grants on a demo                                |
-| `POST /:name/shares`                 | owner/editor/admin | `{ member, role, owner? }`   | Add or update a grant                                |
-| `DELETE /:name/shares/:member`       | owner/editor/admin | `?owner=`                    | Revoke a grant                                       |
-| `GET /members`                       | any tenant user | —                              | Tenant `user` list for the share picker ([§5](#5-who-can-be-shared-with)) |
+| Method + path                  | Auth role          | Body / query               | Purpose                                                                   |
+| ------------------------------ | ------------------ | -------------------------- | ------------------------------------------------------------------------- |
+| `GET /:name/shares`            | owner/editor/admin | `?owner=` (disambiguation) | List grants on a demo                                                     |
+| `POST /:name/shares`           | owner/editor/admin | `{ member, role, owner? }` | Add or update a grant                                                     |
+| `DELETE /:name/shares/:member` | owner/editor/admin | `?owner=`                  | Revoke a grant                                                            |
+| `GET /members`                 | any tenant user    | —                          | Tenant `user` list for the share picker ([§5](#5-who-can-be-shared-with)) |
 
 `POST /:name/shares` behavior:
 
@@ -482,7 +492,7 @@ Changes to existing endpoints:
     "name": "bean-scene",
     "createdBy": "alice@corp.com",
     "visibility": "private",
-    "role": "editor",        // caller's role: owner | editor | viewer | admin
+    "role": "editor", // caller's role: owner | editor | viewer | admin
     "accessUrl": "/web/d/bean-scene?owner=alice%40corp.com"
   }
   ```
@@ -533,11 +543,11 @@ The Slack demo command (`control-plane/src/bots/slack/commands/demo.ts`) gains
 share subcommands, parsed the same way as the existing
 `deploy`/`stop`/`delete`/`visibility` verbs (RFC-005 §7):
 
-| Command                                  | Action                                             |
-| ---------------------------------------- | -------------------------------------------------- |
-| `demo share {name} {email} [viewer\|editor]` | Grant access (default role: `viewer`)          |
-| `demo unshare {name} {email}`            | Revoke access                                      |
-| `demo shares {name}`                     | List who a demo is shared with                     |
+| Command                                      | Action                                |
+| -------------------------------------------- | ------------------------------------- |
+| `demo share {name} {email} [viewer\|editor]` | Grant access (default role: `viewer`) |
+| `demo unshare {name} {email}`                | Revoke access                         |
+| `demo shares {name}`                         | List who a demo is shared with        |
 
 - **The bot invokes the sharing logic in-process, not over HTTP.** The demo API
   routes are mounted behind `apiAuth` (`/api/demos/*` and `/demos/*` in
@@ -620,45 +630,45 @@ transactional email system exists in the codebase today).
 
 ### Phase 1 — Data model
 
-| Step | File | Change |
-| ---- | ---- | ------ |
-| 1a | `sdk-client-deno/src/db/schema.ts` | Add `demo_share` as migration index 10; bump `SCHEMA_VERSION` 9 → 10 |
-| 1b | `sdk-client-deno/src/db/demo-shares.ts` (new) | CRUD module (`upsert`, `remove`, `forMember`, `forDemo`, `role`) |
+| Step | File                                          | Change                                                               |
+| ---- | --------------------------------------------- | -------------------------------------------------------------------- |
+| 1a   | `sdk-client-deno/src/db/schema.ts`            | Add `demo_share` as migration index 10; bump `SCHEMA_VERSION` 9 → 10 |
+| 1b   | `sdk-client-deno/src/db/demo-shares.ts` (new) | CRUD module (`upsert`, `remove`, `forMember`, `forDemo`, `role`)     |
 
 ### Phase 2 — Access resolution and routes
 
-| Step | File | Change |
-| ---- | ---- | ------ |
-| 2a | `control-plane/src/api/demos/access.ts` (new) | `resolveAccess` + `can(role, action)` capability map |
-| 2b | `control-plane/src/api/demos/proxy.ts` | Replace `resolveDemo` with `resolveAccess`; honor `?owner=`; update `referred()` |
-| 2c | `control-plane/src/api/demos/routes.ts` | Re-scope all mutating routes to `ownerId`; add capability checks; persist `visibility` on deploy; add `GET/POST/DELETE /:name/shares`, `GET /members`; extend `GET /` with `role`/`accessUrl` and shared demos; reap shares on delete |
-| 2d | `sdk-client-deno/src/operations/demos.ts` | No type change required for `demo.json`; `role`/`accessUrl` are response-only (added in the route). Optional: export a small `accessUrl` helper |
+| Step | File                                          | Change                                                                                                                                                                                                                                |
+| ---- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2a   | `control-plane/src/api/demos/access.ts` (new) | `resolveAccess` + `can(role, action)` capability map                                                                                                                                                                                  |
+| 2b   | `control-plane/src/api/demos/proxy.ts`        | Replace `resolveDemo` with `resolveAccess`; honor `?owner=`; update `referred()`                                                                                                                                                      |
+| 2c   | `control-plane/src/api/demos/routes.ts`       | Re-scope all mutating routes to `ownerId`; add capability checks; persist `visibility` on deploy; add `GET/POST/DELETE /:name/shares`, `GET /members`; extend `GET /` with `role`/`accessUrl` and shared demos; reap shares on delete |
+| 2d   | `sdk-client-deno/src/operations/demos.ts`     | No type change required for `demo.json`; `role`/`accessUrl` are response-only (added in the route). Optional: export a small `accessUrl` helper                                                                                       |
 
 ### Phase 3 — Web UI
 
-| Step | File | Change |
-| ---- | ---- | ------ |
-| 3a | `web/src/islands/demos.tsx` | Role badges, capability-gated actions, `accessUrl` open link, Share panel |
-| 3b | `web/dev/mock.ts`, `web/dev/fixtures/demo-shares.json` (new) | Mock the four endpoints + fixture |
+| Step | File                                                         | Change                                                                    |
+| ---- | ------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| 3a   | `web/src/islands/demos.tsx`                                  | Role badges, capability-gated actions, `accessUrl` open link, Share panel |
+| 3b   | `web/dev/mock.ts`, `web/dev/fixtures/demo-shares.json` (new) | Mock the four endpoints + fixture                                         |
 
 ### Phase 4 — Slack bot
 
-| Step | File | Change |
-| ---- | ---- | ------ |
-| 4a | `control-plane/src/bots/slack/commands/demo.ts` | Parse `share` / `unshare` / `shares` subcommands |
-| 4b | `control-plane/src/bots/slack/commands/demos.ts` | Show role suffix on shared demos |
-| 4c | `control-plane/src/bots/slack/commands/help.ts` | Document the new subcommands |
-| 4d | `control-plane/src/bots/slack/commands/demo.ts` | Optional Slack DM notification on share (best-effort) |
+| Step | File                                             | Change                                                |
+| ---- | ------------------------------------------------ | ----------------------------------------------------- |
+| 4a   | `control-plane/src/bots/slack/commands/demo.ts`  | Parse `share` / `unshare` / `shares` subcommands      |
+| 4b   | `control-plane/src/bots/slack/commands/demos.ts` | Show role suffix on shared demos                      |
+| 4c   | `control-plane/src/bots/slack/commands/help.ts`  | Document the new subcommands                          |
+| 4d   | `control-plane/src/bots/slack/commands/demo.ts`  | Optional Slack DM notification on share (best-effort) |
 
 ### Phase 5 — Docs and tests
 
-| Step | File | Change |
-| ---- | ---- | ------ |
-| 5a | `docs/storage.md`, `docs/iam.md` | Document `demo_share` and the share access model ([§14](#14-documentation-changes)) |
-| 5b | `AGENTS.md` | Add the share endpoints to the demo/diagnostic references |
-| 5c | `CHANGELOG.md` | Feature entry under the next `cli/deno.jsonc` bump |
-| 5d | `cli/test/demo-shares.test.ts` (new), `cli/test/slack-demo.test.ts` | Resolver, route auth, and Slack parser tests ([§15](#15-test-plan)) |
-| 5e | This RFC | Mark **Status: Implemented** once merged and shipped |
+| Step | File                                                                | Change                                                                              |
+| ---- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 5a   | `docs/storage.md`, `docs/iam.md`                                    | Document `demo_share` and the share access model ([§14](#14-documentation-changes)) |
+| 5b   | `AGENTS.md`                                                         | Add the share endpoints to the demo/diagnostic references                           |
+| 5c   | `CHANGELOG.md`                                                      | Feature entry under the next `cli/deno.jsonc` bump                                  |
+| 5d   | `cli/test/demo-shares.test.ts` (new), `cli/test/slack-demo.test.ts` | Resolver, route auth, and Slack parser tests ([§15](#15-test-plan))                 |
+| 5e   | This RFC                                                            | Mark **Status: Implemented** once merged and shipped                                |
 
 No `sdk-agent-nodejs` change is required — the demo agent generates source and is
 unaware of sharing. Existing tenant DBs migrate automatically to v10 on the next

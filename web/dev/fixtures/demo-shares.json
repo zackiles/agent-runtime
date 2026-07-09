@@ -1,0 +1,20 @@
+{
+  "bean-scene": [
+    {
+      "ownerId": "alice@local",
+      "slug": "bean-scene",
+      "memberId": "dev@local",
+      "role": "editor",
+      "grantedBy": "alice@local",
+      "createdAt": "2025-06-04T09:05:00Z"
+    },
+    {
+      "ownerId": "alice@local",
+      "slug": "bean-scene",
+      "memberId": "bob@local",
+      "role": "viewer",
+      "grantedBy": "alice@local",
+      "createdAt": "2025-06-04T09:06:00Z"
+    }
+  ]
+}

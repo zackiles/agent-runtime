@@ -175,6 +175,33 @@ free intra-region transfer.
 
 ---
 
+## Demo Sharing
+
+A demo is identified by `(tenant, owner email, slug)` — the owner email scopes
+its GCS source archive, `demo.json`, Cloud Run service, and image. Sharing a
+demo with another tenant user is recorded in the per-tenant SQLite database
+(the same `registry.db` synced to GCS), **not** in `demo.json` — a
+`member_id`-indexed table answers "which demos are shared with me?" in one
+query instead of scanning every owner's bucket prefix.
+
+The `demo_share` table (schema v10) holds one row per grant:
+
+| Column       | Meaning                                                |
+| ------------ | ------------------------------------------------------ |
+| `owner_id`   | Email that scopes the demo's storage/service (creator) |
+| `slug`       | Demo slug (matches `demo.json` `name`)                 |
+| `member_id`  | Email the demo is shared with                          |
+| `role`       | `viewer` or `editor`                                   |
+| `granted_by` | Email that created the grant (owner, editor, or admin) |
+
+Shared demos are still served through the authenticated `/web/d/{slug}` proxy
+(carrying `?owner=` for disambiguation) and edited through `/api/demos/*` under
+the **owner's** storage scope — no new Cloud Run IAM binding is created per
+member. See [iam.md](iam.md#demo-sharing) for the capability matrix and
+[RFC-010](rfc/rfc-010-demo-sharing.md) for the full design.
+
+---
+
 ## Agent and Tool Files
 
 Files uploaded to an agent or tool are stored at a predictable `files/`

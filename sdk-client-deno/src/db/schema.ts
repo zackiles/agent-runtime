@@ -1,7 +1,7 @@
 import type { Database } from '@db/sqlite'
 import { TOOLS } from '../defaults/tools.ts'
 
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 const MIGRATIONS: string[] = [
   `
@@ -359,6 +359,23 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_client_tenant
   ON telemetry_client(tenant_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_client_hash
   ON telemetry_client(key_hash);
+`,
+  `
+CREATE TABLE IF NOT EXISTS demo_share (
+  tenant_id  TEXT NOT NULL REFERENCES tenant(id),
+  owner_id   TEXT NOT NULL,
+  slug       TEXT NOT NULL,
+  member_id  TEXT NOT NULL,
+  role       TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+  granted_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (tenant_id, owner_id, slug, member_id)
+);
+
+CREATE INDEX IF NOT EXISTS demo_share_member
+  ON demo_share (tenant_id, member_id);
+CREATE INDEX IF NOT EXISTS demo_share_demo
+  ON demo_share (tenant_id, owner_id, slug);
 `,
 ]
 
