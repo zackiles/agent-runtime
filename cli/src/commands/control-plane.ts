@@ -1,6 +1,6 @@
 import { parseArgs } from '@std/cli'
 import { exists } from '@std/fs'
-import { join } from '@std/path'
+import { join, resolve } from '@std/path'
 import { parse as parseJsonc } from '@std/jsonc'
 import { UntarStream } from '@std/tar/untar-stream'
 import type {
@@ -180,6 +180,7 @@ async function extractEmbeddedArchive(dest: string): Promise<void> {
     try {
       const file = await Deno.open(path, { read: true })
       const destDir = dest.replace(/\/[^/]+$/, '')
+      const destRoot = resolve(destDir)
 
       for await (
         const entry of file.readable
@@ -187,6 +188,9 @@ async function extractEmbeddedArchive(dest: string): Promise<void> {
           .pipeThrough(new UntarStream())
       ) {
         const outPath = join(destDir, entry.path)
+        if (!resolve(outPath).startsWith(destRoot + '/')) {
+          throw new Error(`Refusing to extract outside dest: ${entry.path}`)
+        }
         if (entry.header.typeflag === 'directory') {
           await Deno.mkdir(outPath, { recursive: true })
         } else {

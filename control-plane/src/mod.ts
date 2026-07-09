@@ -36,6 +36,7 @@ import settingsApi from './api/settings.ts'
 import artifactsApi from './api/artifacts.ts'
 import slackBotApi from './api/bots/slack/routes.ts'
 import { handleSlackEvent, initBot } from './bots/slack/mod.ts'
+import { assertSecret } from './session.ts'
 import docsApi from './api/docs.ts'
 
 const app = new Hono<Env>()
@@ -204,6 +205,7 @@ app.all('*', proxyReferred)
 async function start(
   port = loadRuntime().controlPlane.port,
 ): Promise<void> {
+  assertSecret()
   const rc = loadRuntime()
   const project = Deno.env.get('GCP_PROJECT') ||
     Deno.env.get('GOOGLE_CLOUD_PROJECT') || ''

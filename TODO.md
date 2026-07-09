@@ -78,6 +78,24 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       the destination directory. **Fix:** After `join(dest, entry.path)`, verify
       the resolved absolute path starts with `resolve(dest)`.
 
+- [ ] **Request-scoped DB handles (global `activeTenantId` is racy)**
+      `sdk-client-deno/src/db/mod.ts` The DB layer tracks a single global
+      `activeTenantId`, and `getDb()` returns whatever tenant is currently
+      active. `resolveTenant` sets it per request via `open()`, but the control
+      plane serves requests concurrently and handlers `await` (e.g.
+      `c.req.json()`) between tenant resolution and `getDb()`. Two interleaved
+      requests for different tenants can therefore race on the active tenant, so
+      one request may read/write another tenant's DB — a cross-tenant isolation
+      hazard, not just a testability concern. It is also the root cause behind
+      the cross-tenant copy bug (`SECURITY-TODO.md` #42), whose immediate fix
+      deliberately works around the global (via a non-mutating `getTenantDb()`
+      accessor) rather than relying on it. **Fix:** Move to request-scoped DB
+      handles — resolve the tenant `Database` once per request and pass it
+      explicitly through the call chain (or via request context) instead of the
+      global `getDb()`/`activeTenantId`. Supersedes the "global mutable
+      singleton" (§2) and "replace global DB singleton with dependency
+      injection" (§3) notes; consolidate when implemented.
+
 ### Medium
 
 - [ ] **Install scripts receive full `process.env`**
