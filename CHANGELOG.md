@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file. This projec
 
 ### Features
 
+- Add demo sharing with viewer and editor roles (RFC-010). Owners can share a
+  demo with other users in the same tenant without changing any Cloud Run IAM.
+  - Data: new per-tenant `demo_share` table (schema v10) keyed by
+    `(owner, slug, member)`, indexed by member for fast "shared with me" lookup.
+  - Control plane: a single `resolveAccess` helper folds ownership, shares, and
+    admin status into one role; new `GET /:name/shares`, `POST /:name/shares`,
+    `DELETE /:name/shares/:member`, and `GET /members` endpoints; `GET /` and
+    `GET /:name` now return `role` and `accessUrl`; the proxy carries `?owner=`
+    and returns a `300` disambiguation page for slugs shared by multiple owners.
+  - Web: role badges, capability-gated actions, and a per-demo Share panel.
+  - Slack: `demo share`, `demo unshare`, and `demo shares` subcommands, plus
+    shared demos (with a role suffix) in `demos`; optional DM to the new member.
+  - Audit: create/update/revoke logged as `demo-share`.
+
 - Add telemetry clients and API keys (RFC-008). Telemetry ingest is now gated by
   a write-only, per-client API key instead of a Google identity, while reading
   telemetry and managing clients require admin identity.

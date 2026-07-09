@@ -132,11 +132,6 @@ Deno.test('DB schema has migration 8 for skill/rule versioning', async () => {
   )
   const content = await Deno.readTextFile(path)
   assertEquals(
-    content.includes('SCHEMA_VERSION = 9'),
-    true,
-    'schema version must be 9',
-  )
-  assertEquals(
     content.includes('skill_new'),
     true,
     'migration must recreate skill table',

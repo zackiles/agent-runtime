@@ -2,11 +2,13 @@ import type { Context } from '@hono/hono'
 import type { Env } from '../../types.ts'
 import { context } from '../../types.ts'
 import { webAuth } from '../../middleware/auth.ts'
-import { listDemos, loadMeta, slugify } from '@ar/client/operations/demos'
+import { slugify } from '@ar/client/operations/demos'
 import type { DemoMeta } from '@ar/client/operations/demos'
 import platform from '@ar/client/platform'
 import logger from '@ar/client/utils/logger'
 import { gcpConfig } from './deploy.ts'
+import { isAmbiguous, resolveAccess } from './access.ts'
+import type { Ambiguous } from './access.ts'
 
 const HOP_BY_HOP = new Set([
   'connection',
@@ -19,43 +21,53 @@ const HOP_BY_HOP = new Set([
   'upgrade',
 ])
 
-async function resolveDemo(
-  project: string,
-  tenantId: string,
-  email: string,
-  isAdmin: boolean,
-  name: string,
-): Promise<DemoMeta | null> {
-  const own = await loadMeta(project, tenantId, email, name)
-  if (own) return own
-  // A private demo belongs to its creator; only admins may reach another
-  // user's demo. Without this guard any tenant member could invoke a
-  // private Cloud Run service just by knowing the slug.
-  if (!isAdmin) return null
-  const all = await listDemos(project, tenantId)
-  return all.find((d) => d.name === name) ?? null
+// The proxy serves a demo under the flat `/web/d/{slug}` prefix, so a shared
+// demo (which may collide with another owner's slug) must keep its `?owner=`
+// hint across every follow-up request. Assets loaded via the injected
+// `<base href>` carry a same-origin `Referer` of `/web/d/{slug}?owner=…`, so
+// the hint is recoverable even when the asset URL itself dropped the query.
+function ownerHint(c: Context<Env>): string | undefined {
+  const q = c.req.query('owner')
+  if (q) return q
+  try {
+    const ref = c.req.header('referer') || ''
+    return new URL(ref).searchParams.get('owner') || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function ownerQuery(owner?: string): string {
+  return owner ? `?owner=${encodeURIComponent(owner)}` : ''
+}
+
+function withOwner(url: string, owner?: string): string {
+  if (!owner || url.includes('owner=')) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}owner=${encodeURIComponent(owner)}`
 }
 
 function rewriteLocation(
   location: string,
   origin: string,
   prefix: string,
+  owner?: string,
 ): string {
   if (location.startsWith(origin)) {
-    return prefix + location.slice(origin.length)
+    return withOwner(prefix + location.slice(origin.length), owner)
   }
   // Root-relative redirects (e.g. `Location: /login`) would otherwise send
   // the browser to the control-plane host, escaping the proxied demo.
   if (location.startsWith('/') && !location.startsWith('//')) {
-    return prefix + location
+    return withOwner(prefix + location, owner)
   }
   return location
 }
 
-function rewriteHtml(html: string, prefix: string): string {
+function rewriteHtml(html: string, prefix: string, owner?: string): string {
   const withBase = html.replace(
     /<head([^>]*)>/i,
-    `<head$1><base href="${prefix}/">`,
+    `<head$1><base href="${prefix}/${ownerQuery(owner)}">`,
   )
   return withBase.replace(
     /(\b(?:href|src|action)\s*=\s*["'])\/(?!\/)/gi,
@@ -72,11 +84,27 @@ function notFound(name: string): Response {
   )
 }
 
+function disambiguation(name: string, result: Ambiguous): Response {
+  const links = result.owners
+    .map((o) =>
+      `<li><a href="/web/d/${name}?owner=${encodeURIComponent(o)}">` +
+      `${o}</a></li>`
+    )
+    .join('')
+  return new Response(
+    `<!DOCTYPE html><meta charset="utf-8"><title>Which demo?</title>` +
+      `<p>The demo <code>${name}</code> is shared with you by more than one ` +
+      `owner. Choose which one to open:</p><ul>${links}</ul>`,
+    { status: 300, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+  )
+}
+
 async function forward(
   c: Context<Env>,
   meta: DemoMeta,
   name: string,
   rest: string,
+  owner?: string,
 ): Promise<Response> {
   const target = new URL(meta.url!)
   const reqUrl = new URL(c.req.url)
@@ -105,9 +133,18 @@ async function forward(
     init.body = await c.req.raw.arrayBuffer()
   }
 
+  // The demo never needs the proxy's `?owner=` hint; strip it from the
+  // upstream query so it does not leak into the demo's own routing.
+  const upstreamSearch = (() => {
+    const params = new URLSearchParams(reqUrl.search)
+    params.delete('owner')
+    const s = params.toString()
+    return s ? `?${s}` : ''
+  })()
+
   let upstream: Response
   try {
-    upstream = await fetch(`${target.origin}${rest}${reqUrl.search}`, init)
+    upstream = await fetch(`${target.origin}${rest}${upstreamSearch}`, init)
   } catch (err) {
     logger.error('Demo proxy fetch failed', err)
     return new Response('Demo unreachable', { status: 502 })
@@ -120,7 +157,7 @@ async function forward(
     const lk = k.toLowerCase()
     if (HOP_BY_HOP.has(lk)) continue
     if (lk === 'location') {
-      out.set(k, rewriteLocation(v, target.origin, prefix))
+      out.set(k, rewriteLocation(v, target.origin, prefix, owner))
       continue
     }
     // Rewritten HTML is decoded and re-sized, so drop stale framing headers.
@@ -131,7 +168,7 @@ async function forward(
   }
 
   if (isHtml) {
-    const text = rewriteHtml(await upstream.text(), prefix)
+    const text = rewriteHtml(await upstream.text(), prefix, owner)
     return new Response(text, { status: upstream.status, headers: out })
   }
   return new Response(upstream.body, { status: upstream.status, headers: out })
@@ -141,8 +178,18 @@ async function handle(c: Context<Env>): Promise<Response> {
   const { tenantId, email, isAdmin } = context(c)
   const { project } = gcpConfig()
   const name = slugify(c.req.param('name') || '')
+  const owner = ownerHint(c)
 
-  const meta = await resolveDemo(project, tenantId, email, isAdmin, name)
+  const access = await resolveAccess(
+    project,
+    tenantId,
+    email,
+    isAdmin,
+    name,
+    owner,
+  )
+  if (isAmbiguous(access)) return disambiguation(name, access)
+  const meta = access?.meta
   if (!meta || !meta.url || meta.status !== 'running') return notFound(name)
 
   // Public demos are bound to allUsers and reachable directly.
@@ -153,7 +200,7 @@ async function handle(c: Context<Env>): Promise<Response> {
   // The control plane strips trailing slashes globally, so the proxy root has
   // no trailing slash; the injected `<base href>` handles relative resolution.
   const rest = reqUrl.pathname.slice(prefix.length) || '/'
-  return forward(c, meta, name, rest)
+  return forward(c, meta, name, rest, access!.ownerId)
 }
 
 // A proxied demo runs under the `/web/d/<slug>` prefix, but JavaScript inside
@@ -163,11 +210,14 @@ async function handle(c: Context<Env>): Promise<Response> {
 // carries a `Referer` pointing at a proxied demo, route it back to that demo.
 async function referred(c: Context<Env>): Promise<Response> {
   let name = ''
+  let owner: string | undefined
   try {
     const ref = c.req.header('referer') || ''
+    const refUrl = new URL(ref)
     name = slugify(
-      new URL(ref).pathname.match(/^\/web\/d\/([^/?#]+)/)?.[1] || '',
+      refUrl.pathname.match(/^\/web\/d\/([^/?#]+)/)?.[1] || '',
     )
+    owner = refUrl.searchParams.get('owner') || undefined
   } catch {
     name = ''
   }
@@ -177,7 +227,15 @@ async function referred(c: Context<Env>): Promise<Response> {
   const denied = await webAuth(c, async () => {
     const { tenantId, email, isAdmin } = context(c)
     const { project } = gcpConfig()
-    const meta = await resolveDemo(project, tenantId, email, isAdmin, name)
+    const access = await resolveAccess(
+      project,
+      tenantId,
+      email,
+      isAdmin,
+      name,
+      owner,
+    )
+    const meta = isAmbiguous(access) ? null : access?.meta
     if (!meta || !meta.url || meta.status !== 'running') {
       proxied = await c.notFound()
       return
@@ -189,7 +247,13 @@ async function referred(c: Context<Env>): Promise<Response> {
       proxied = c.redirect(`${base}${reqUrl.pathname}${reqUrl.search}`, 302)
       return
     }
-    proxied = await forward(c, meta, name, reqUrl.pathname)
+    proxied = await forward(
+      c,
+      meta,
+      name,
+      reqUrl.pathname,
+      isAmbiguous(access) ? undefined : access?.ownerId,
+    )
   })
   return denied ?? proxied ?? c.notFound()
 }

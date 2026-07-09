@@ -87,11 +87,10 @@ Deno.test('telemetry-clients DB: pepper changes the hash, plaintext never stored
   else Deno.env.set('AR_TELEMETRY_KEY_PEPPER', prev)
 })
 
-Deno.test('schema: telemetry_client migration at version 9', async () => {
+Deno.test('schema: telemetry_client migration is present', async () => {
   const src = await Deno.readTextFile(
     join(ROOT, 'sdk-client-deno/src/db/schema.ts'),
   )
-  assertEquals(src.includes('SCHEMA_VERSION = 9'), true, 'schema version is 9')
   assertEquals(
     src.includes('CREATE TABLE IF NOT EXISTS telemetry_client'),
     true,

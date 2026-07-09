@@ -33,6 +33,7 @@ Deno tasks run from `cli/`. Web tasks run from `web/`.
 - `deno task check`: Format, lint, type-check
 - `deno task test`: Run tests
 - `deno task build`: Production build
+- `deno task hooks`: Enable the git pre-commit hook (run once after cloning)
 - `npm run dev` (web/): Vite dev with mock API
 
 ## Packages
@@ -344,6 +345,9 @@ gcloud secrets versions access latest --secret=<name> --project=<project>
 
 - Semantic commits focusing on "why"
 - Run `deno task check` before committing
+- Run `deno task hooks` once after cloning to enable the pre-commit hook
+  (`.githooks/pre-commit`), which auto-formats staged files so commits never
+  carry `deno fmt` drift
 - `sdk-agent-nodejs/bin/` and `default-registry/tools/*/[0-9]*/tool` tracked by git LFS
 - When bumping the version in `cli/deno.jsonc`, add a matching entry to
   `CHANGELOG.md` summarising what changed in that release

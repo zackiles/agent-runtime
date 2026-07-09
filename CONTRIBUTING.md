@@ -42,6 +42,7 @@ All Deno tasks run from `cli/`:
 | `deno task run:dev`    | Run with watch + debug logging               |
 | `deno task check`      | Format, lint, and type-check                 |
 | `deno task test`       | Run tests                                    |
+| `deno task hooks`      | Enable the git pre-commit hook (once)        |
 | `deno task build`      | Production build (web + control plane + CLI) |
 | `deno task tag`        | Version and release                          |
 | `deno task build:docs` | Generate HTML documentation                  |
@@ -452,6 +453,19 @@ gcloud pubsub topics publish orders \
 - Strict TypeScript with `exactOptionalPropertyTypes`
 - No inline comments unless they explain a non-obvious "why"
 - Run `deno task check` before committing
+
+### Git Hooks
+
+A tracked pre-commit hook in [`.githooks/`](.githooks/) runs `deno fmt` on
+staged files so commits never carry formatting drift (the CI quality gate runs
+`deno fmt`). Enable it once after cloning:
+
+```sh
+deno task hooks
+```
+
+This sets `core.hooksPath` to `.githooks`. The hook only touches staged files
+deno fmt manages and re-stages them; it is a no-op when `deno` is not on `PATH`.
 
 ## Secrets
 

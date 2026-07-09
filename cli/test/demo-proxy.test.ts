@@ -25,18 +25,18 @@ Deno.test('proxy mints an identity token and gates on the session', async () => 
   )
   assertStringIncludes(proxy, 'getIdentityToken(target.origin)')
   assertStringIncludes(proxy, 'context(c)')
-  assertStringIncludes(proxy, 'resolveDemo(')
+  assertStringIncludes(proxy, 'resolveAccess(')
 })
 
 Deno.test('cross-user private demo lookup is restricted to admins', async () => {
-  const proxy = await Deno.readTextFile(
-    join(ROOT, 'control-plane/src/api/demos/proxy.ts'),
+  const access = await Deno.readTextFile(
+    join(ROOT, 'control-plane/src/api/demos/access.ts'),
   )
-  // A non-admin must only resolve their own demo; the tenant-wide
-  // listDemos fallback must be gated behind an admin check.
-  assertStringIncludes(proxy, 'if (!isAdmin) return null')
-  const guardIdx = proxy.indexOf('if (!isAdmin) return null')
-  const listIdx = proxy.indexOf('listDemos(')
+  // A non-admin must only resolve their own demo or an explicit share; the
+  // tenant-wide listDemos fallback must be gated behind an admin check.
+  assertStringIncludes(access, 'if (isAdmin) {')
+  const guardIdx = access.indexOf('if (isAdmin) {')
+  const listIdx = access.indexOf('listDemos(')
   assertEquals(
     guardIdx > -1 && listIdx > -1 && guardIdx < listIdx,
     true,

@@ -447,6 +447,13 @@ showing each step (fetch, build, push).
 
 ## Development
 
+After cloning the repo, enable the git hooks once so commits are auto-formatted
+(the CI quality gate runs `deno fmt`):
+
+```bash
+deno task hooks
+```
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide covering
 building from source, architecture, testing, and the web dashboard. See
 [`web/README.md`](web/README.md) for web dashboard architecture, code style, and
