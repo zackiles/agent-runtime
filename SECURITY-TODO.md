@@ -24,22 +24,6 @@ match the cookie before exchanging the code.
 
 ---
 
-### 6. Default Session Secret (partially addressed)
-
-**File:** `control-plane/src/session.ts`
-
-`AR_SESSION_SECRET` still falls back to `'ar-default-session-key'` for local dev.
-`getKey()` now throws when `!secret && K_SERVICE` is set, so Cloud Run cannot use
-the hardcoded key — but the check is **lazy** (on first session encode/decode),
-not a process startup guard. The service can still boot and serve `/health`
-before the missing secret is detected.
-
-**Fix:** Move the `K_SERVICE`-gated check to process startup in
-`control-plane/src/mod.ts` so a misconfigured Cloud Run deployment fails fast
-rather than on the first authenticated request.
-
----
-
 ### 9. Unauthenticated Webhook Endpoint
 
 **File:** `control-plane/src/mod.ts`
@@ -96,25 +80,6 @@ replacement order.
 **Fix:** LOW priority. The current code is safe but fragile. If this component
 is modified, consider switching to a proper markdown library (marked +
 DOMPurify) to make the safety guarantees explicit and maintainable.
-
----
-
-### 12. Tar Extraction Path Traversal in CLI Deploy
-
-**File:** `cli/src/commands/control-plane.ts:181-220`
-
-The tar archive is extracted from a **self-embedded binary** — it's the
-compiled control plane packed into the CLI release artifact. The archive content
-is built by the project's own CI pipeline (`release.yml`), not from user input.
-An attacker cannot supply a crafted archive unless they compromise the CI
-pipeline or the release binary.
-
-This is not a practical vulnerability in the current workflow. However, if the
-extraction function is ever reused for user-supplied archives, it would become
-one.
-
-**Fix:** LOW priority. Add a defensive check (`resolved.startsWith(destDir)`)
-as a safeguard against future reuse. No urgency since the input is self-authored.
 
 ---
 
@@ -355,24 +320,6 @@ properties.
 
 ---
 
-### 28. `agent_edge.ref_type` Used as Table Name in SQL
-
-**File:** `sdk-client-deno/src/db/copy.ts`
-
-The dynamic SQL only runs for `ref_type` values of `skill` or `rule` (the branch
-guards on known types). The execute path (`copyRegistryEntity`/`copyConfig`) now
-calls `assertValidTable()`, but `plan()` still builds `` `SELECT * FROM
-${edge.refType} ...` `` without that allowlist check. Inserts into `agent_edge`
-come from controlled code paths, not raw HTTP input.
-
-An invalid table name would cause a SQLite error, not data leakage. This is
-a defense-in-depth concern, not an exploitable injection.
-
-**Fix:** LOW priority. Call `assertValidTable()` in `plan()` too, for
-consistency with the execute path.
-
----
-
 ### 29. Registry Owner List Exposed
 
 **File:** `control-plane/src/api/registry.ts` — `GET /:id/owners`
@@ -385,21 +332,6 @@ contact about a tool or agent.
 **Fix:** LOW priority. Gate behind `canRead` if private entity owner lists
 should be hidden. For most internal-org deployments, this is informational and
 expected.
-
----
-
-### 30. Slack Timestamp NaN Edge Case
-
-**File:** `control-plane/src/bots/slack/mod.ts:20-21`
-
-The HMAC check is the actual authentication mechanism. A missing/invalid
-timestamp only weakens replay protection — and replaying a message still
-requires a valid HMAC, which requires `SLACK_SIGNING_SECRET`. Slack always sends
-the timestamp header, so a missing one means the request is not from Slack (and
-will fail HMAC).
-
-**Fix:** LOW priority. Add `if (isNaN(ts)) return false` for spec compliance
-with Slack's reference implementation. Not exploitable in practice.
 
 ---
 
@@ -574,16 +506,15 @@ untrusted location.
 
 ## Priority Order
 
-Items #1–#4, #7, #8, #18, #23, #31, and #38 have been resolved or are no longer
-applicable and were removed. Numbering of the remaining items is preserved so
-existing cross-references stay valid.
+Items #1–#4, #6, #7, #8, #12, #18, #23, #28, #30, #31, and #38 have been
+resolved or are no longer applicable and were removed. Numbering of the
+remaining items is preserved so existing cross-references stay valid.
 
 **Before next deploy:**
 
 - [ ] Fix cross-tenant copy writing to the wrong tenant DB (#42)
 - [ ] Sign access callback context (#15)
 - [ ] Bind OAuth login `state` to the browser via a nonce cookie (#5)
-- [ ] Move the Cloud Run session-secret guard to startup (#6)
 
 **Short-term:**
 

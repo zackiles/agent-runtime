@@ -18,7 +18,8 @@ function verifySlackRequest(
 ): boolean {
   const fiveMinutes = 5 * 60
   const now = Math.floor(Date.now() / 1000)
-  if (Math.abs(now - parseInt(timestamp, 10)) > fiveMinutes) {
+  const ts = parseInt(timestamp, 10)
+  if (isNaN(ts) || Math.abs(now - ts) > fiveMinutes) {
     return false
   }
 

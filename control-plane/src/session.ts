@@ -4,15 +4,19 @@ const CLEAR_FLAGS = 'Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0'
 
 let signingKey: CryptoKey | null = null
 
-async function getKey(): Promise<CryptoKey> {
-  if (signingKey) return signingKey
-  const secret = Deno.env.get('AR_SESSION_SECRET')
-  if (!secret && Deno.env.get('K_SERVICE')) {
+function assertSecret(): void {
+  if (!Deno.env.get('AR_SESSION_SECRET') && Deno.env.get('K_SERVICE')) {
     throw new Error(
       'AR_SESSION_SECRET is required on Cloud Run. ' +
         'Set it via Secret Manager or env vars.',
     )
   }
+}
+
+async function getKey(): Promise<CryptoKey> {
+  if (signingKey) return signingKey
+  assertSecret()
+  const secret = Deno.env.get('AR_SESSION_SECRET')
   const raw = new TextEncoder().encode(secret || 'ar-default-session-key')
   signingKey = await crypto.subtle.importKey(
     'raw',
@@ -99,4 +103,4 @@ function extract(cookieHeader: string | undefined): string | null {
   return cookieHeader?.match(/ar_session=([^;]+)/)?.[1] ?? null
 }
 
-export { clearCookie, decode, encode, extract, setCookie }
+export { assertSecret, clearCookie, decode, encode, extract, setCookie }

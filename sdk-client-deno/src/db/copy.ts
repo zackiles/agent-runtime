@@ -131,6 +131,7 @@ function plan(
       ) {
         const seen = edge.refType === 'skill' ? seenSkills : seenRules
         seen.add(edge.refId)
+        assertValidTable(edge.refType)
         const entity = db.prepare(
           `SELECT * FROM ${edge.refType} WHERE id = ? AND tenant_id = ?`,
         ).get(edge.refId, fromTenant) as
