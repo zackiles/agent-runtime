@@ -22,6 +22,25 @@ login attempt and the login-CSRF vector described by the original item remains.
 cookie, embed it in the signed `state`, and require the callback's state nonce to
 match the cookie before exchanging the code.
 
+**Implementation notes (verified against current code):**
+
+- In `/login`: `const nonce = crypto.randomUUID()`, sign it into the state
+  (`encode({ email: 'oauth-login', nonce })`), and set
+  `ar_oauth_nonce=<nonce>; HttpOnly; Secure; SameSite=Lax; Max-Age=600;
+  Path=/web/auth`.
+- In `/callback`: read the nonce cookie, decode state, require
+  `state.nonce === cookieNonce`, and clear the cookie on the response.
+- Generalize the `session.ts` payload type from `{ email: string }` to
+  `{ email: string; nonce?: string }`. This is backward compatible — existing
+  session cookies (no `nonce`) still decode.
+- **Regression guardrails:** `SameSite=Lax` (not `Strict`) is required so the
+  cookie survives the top-level GET redirect back from Google. Handle the
+  missing/expired-cookie case (e.g. a bookmarked `/callback`) via the existing
+  `errorPage(403, ...)` path, not a 500. Scope the cookie `Path` to
+  `/web/auth` so it isn't sent on every request. Verify a full login
+  round-trip after the change.
+- Self-contained in `control-plane/src/api/auth.ts` + `session.ts`. Effort: S.
+
 ---
 
 ### 9. Unauthenticated Webhook Endpoint
@@ -143,6 +162,27 @@ JSON payload with `AR_SESSION_SECRET`), or look up the grant from server-side
 storage and only allow callback data that matches a pending grant's expected
 resource/scope.
 
+**Implementation notes (verified against current code):**
+
+- The callback already re-checks that `decoded.grantId` maps to a **pending**
+  grant owned by the caller (`routes.ts:144-157`), so it is narrower than the
+  original write-up implies. The remaining trust gap is that `resource` and
+  `scope` come from the client-supplied blob.
+- **Prefer the grant-lookup approach over HMAC signing.** Derive `resource`
+  and `scope` from the _stored_ `AccessGrant` (loaded by `grantId`), not from
+  the decoded context. Accept only `data` (the secret values) from the client
+  and write secrets strictly under the stored grant's own
+  `access-{grant.resource}-*` prefix.
+- **Why not signing:** the `context` blob is produced by the **deployed
+  access-agent**, not this repo. HMAC signing requires changing the agent to
+  sign and coordinating a deploy — an out-of-order deploy breaks the flow.
+  The grant-lookup fix touches only the control plane.
+- **Open decision:** whether to now **require** `grantId` (reject callbacks
+  without one). This is a behavior change that must be validated against the
+  access-agent before enabling.
+- Confirm `AccessGrant` carries `resource`/`scope` (it does — see
+  `access/grants.ts`). Effort: M, risk: Med (cross-component coupling).
+
 ---
 
 ### 16. Secrets Exposed in Cloud Run Env Vars (control-plane deploy)
@@ -162,6 +202,33 @@ deploy path which uses `--set-secrets` (Secret Manager refs).
 values (OAuth secrets, session secret, Slack credentials) while keeping
 non-sensitive config in env vars.
 
+**Implementation notes (verified against current code):**
+
+- The deploy **already** syncs every secret to Secret Manager via
+  `syncSecrets` (`control-plane.ts:~986`) and grants the runtime SA
+  `secretAccessor` — then _also_ writes the values into `env.yaml`
+  (`control-plane.ts:~1051`) and passes `--env-vars-file`. The fix is to stop
+  putting secret values in `env.yaml`.
+- Split `envMap`: keep non-secret config (`AR_MODE`, `GCP_*`, `AR_BUILD_*`,
+  `AR_DB_PATH`, `GCP_VPC_CONNECTOR`) in `--env-vars-file`, and move the secret
+  env vars (the ones iterated from `rc.secrets` at `control-plane.ts:~1038`,
+  plus the `AR_BOT_SLACK_CLIENT_ID/SECRET` aliases) to
+  `--set-secrets=ENVVAR=<secretName>:latest`. Build the list from `rc.secrets`
+  (key = Secret Manager name, value = env var name) so it stays in sync with
+  `default-settings.jsonc`. `bot.ts:246-264` already does exactly this pattern.
+- **Regression guardrails:**
+  - The secret sync is currently behind an **optional** `confirm`
+    (`control-plane.ts:~982`). `confirm` returns its default (`true`) under
+    `--no-input`/non-TTY so CI is fine, but an interactive user who _declines_
+    would then hit `--set-secrets` referencing non-existent secrets and the
+    deploy fails. Make the sync non-optional when using `--set-secrets`, or
+    verify each referenced secret exists and skip missing ones with a warning.
+  - Only reference secrets that actually have a value (mirror the existing
+    `if (value)` guard) — `--set-secrets` errors on a missing secret.
+  - Leave the follow-up `--update-env-vars=AR_AUDIENCE=<url>`
+    (`control-plane.ts:~1114`) as-is; it's non-secret.
+- Effort: M, risk: Med (deploy-path change; test an actual deploy).
+
 ---
 
 ### 17. No Content-Security-Policy Header (partially addressed)
@@ -175,6 +242,34 @@ The three minimum headers are now set on HTML shell responses
 
 **Fix:** Add a `Content-Security-Policy` with `default-src 'self'` once the
 inline script in the shell is moved to a nonce or external file.
+
+**Implementation notes (verified against current code):**
+
+- There **is** a real inline `<script>` in the shell (`web/mod.ts:219-246`)
+  that sets `window.__AR__` and runs the gravatar/avatar logic, plus a module
+  script (`/web/static/entry.js`) and a Gravatar `<img>`. A naive
+  `default-src 'self'` breaks the app, so this is not a one-line add.
+- **Plan:** generate a per-request nonce in `web.ts`, thread it through
+  `renderPage`/`shell`, and add `nonce="${nonce}"` to the inline script (and
+  module script). Externalizing the inline script into `entry.js` is the
+  cleaner long-term option but a larger web-build change; the nonce is the
+  smaller first step.
+- **CSP that reflects reality:** `default-src 'self'`;
+  `script-src 'self' 'nonce-<n>'`;
+  `img-src 'self' https://www.gravatar.com data:` (avatars);
+  `style-src 'self' 'unsafe-inline'` (Preact/Tailwind commonly emit inline
+  `style` attributes — verify before dropping `'unsafe-inline'`);
+  `connect-src 'self'`; `frame-ancestors 'none'` (aligns with the existing
+  `X-Frame-Options: DENY`).
+- Apply the same header to `errorPage` (login/error HTML in
+  `middleware/auth.ts`) and the demo proxy responses, or they'll be
+  inconsistent.
+- **Regression guardrails:** CSP violations fail **silently in the browser**
+  (blocked resource, blank avatar, dead script), not as a server error. Ship
+  `Content-Security-Policy-Report-Only` first, exercise dashboard / registry /
+  demos / docs (note `docs.tsx:129` uses `innerHTML` for rendered SVG) and the
+  login/error pages with DevTools open, then flip to enforcing.
+- Effort: M–H, risk: Med. Best validated in a browser, not by reasoning alone.
 
 ---
 
@@ -195,6 +290,28 @@ Replace `-A` with explicit permissions: `--allow-net --allow-read=/app,/data
 --allow-write=/data --allow-env --unstable-ffi`. The FFI flag is unavoidable
 for SQLite.
 
+**Implementation notes (verified against current code):**
+
+- Actual line is `Dockerfile:48` (`CMD ["deno", "run", "-A", "--unstable-ffi",
+  ...]`); `/data` is a `VOLUME` (`Dockerfile:32-33`).
+- Add the user and fix ownership **before** `USER app`:
+  `RUN adduser --disabled-password --gecos '' app && mkdir -p /data &&
+  chown -R app /app /data`, then `USER app`.
+- **`--allow-run` is likely required in addition to the listed flags** — the
+  control plane shells out to subprocesses in some paths. Confirm against
+  actual subprocess usage before dropping it, or deploy/build flows break at
+  runtime (Deno permission errors throw at call time, not build time).
+- **Regression guardrails (the real traps):**
+  - `/data` ownership: Cloud Run's writable volume and local `-v` mounts can
+    reset ownership; if the non-root UID can't write `/data`, WAL DB writes
+    fail. Test both local `docker run` and a Cloud Run revision.
+  - GCS FUSE mounts (rules/skills) mount with a specific uid/gid — confirm the
+    `app` user can read them, or set the mount uid to match.
+  - `--allow-read`/`--allow-write` scoping: the web module reads `dist/`, docs
+    live under `/app`, DBs under `/data`. A missing path throws at runtime —
+    exercise serve-web + open-DB + agent-deploy end to end before merging.
+- Effort: S–M, risk: Med. Validate with a scratch Cloud Run revision.
+
 ---
 
 ### 20. Error Messages Leak Internal Details
@@ -209,6 +326,24 @@ They are not full stack traces, but expose more than a user needs to see.
 **Fix:** Map 5xx errors to a generic `"Internal error"` response. Log the
 original `err.message` server-side for debugging. Let 4xx validation errors
 remain user-facing since they describe client mistakes.
+
+**Implementation notes (verified against current code):**
+
+- This is genuinely cross-cutting: ~30 `err instanceof Error ? err.message`
+  returns across `api/access`, `api/demos`, `api/artifacts`, `api/registry`,
+  and `api/agents`. Do **not** hand-edit each site.
+- Add one shared helper (e.g. `fail(c, err)` in `control-plane/src/types.ts`
+  or a new `api/errors.ts`) that logs the real `err` server-side and returns a
+  generic `{ error: 'Internal error' }` with a 500. Replace the 5xx catch-block
+  returns with `return fail(c, err)`. Leave 4xx validation messages
+  (`'resource is required'`, `'Only admins...'`) untouched — they're
+  user-facing and correct.
+- **Scope to HTTP API routes only. Exclude `bots/slack/**`** — those messages
+  go back to an authenticated Slack user in your own workspace and are
+  diagnostic; genericizing them hurts usability with no external exposure.
+- **Regression guardrails:** preserve status codes (only the body message
+  changes). The web UI surfaces `data.error` (e.g. `demos.tsx`, `me.tsx`) —
+  confirm the generic message renders acceptably. Effort: M, risk: Low.
 
 ---
 
@@ -352,6 +487,48 @@ opened. This is an actionable correctness bug, not expected behavior.
 it and write there), reading source entities from the source DB, so the rows land
 in `${toTenant}.db` and `scheduleSync(toTenant)` uploads them to
 `toTenant/registry.db`.
+
+**Implementation notes (verified against current code — the one-line "write to
+target handle" is insufficient):**
+
+- The DB layer has a single global `activeTenantId` (`db/mod.ts:16`); `getDb()`
+  returns whatever tenant is active. During a copy the active tenant is the
+  **source** (`copy.ts:72` calls `plan(slug, tenantId, target)` where
+  `tenantId` is the `X-Tenant` request tenant).
+- Two things the original fix misses:
+  1. **`transaction()` also binds to `getDb()`** (`db/mod.ts:128`). If writes go
+     to the target handle but `BEGIN/COMMIT` run on the source handle, the
+     target writes land outside any transaction. The transaction must bind to
+     the target handle.
+  2. **Do not use `open(target)` to get the handle** — `open()` sets
+     `activeTenantId = target` as a side effect (`db/mod.ts:60`), which would
+     make the source reads (`getAgent(id, fromTenant)`, `getEdges`) read the
+     wrong DB.
+- **Recommended plan:**
+  - Add `getTenantDb(tenantId): Database` to `db/mod.ts` that returns
+    `dbs.get(id)!.db` **without** touching `activeTenantId` (throw a clear
+    error if not open). Both tenants are already opened at CP startup
+    (`control-plane/src/mod.ts:214`), so the target handle exists for any
+    bootstrapped tenant.
+  - Add a transaction variant taking an explicit handle (e.g.
+    `transaction(fn, db = getDb())`), or inline `BEGIN/COMMIT/ROLLBACK` on the
+    target handle in `execute()`.
+  - In `execute()`: `const targetDb = getTenantDb(toTenant)`; pass `targetDb`
+    to `copyAgent/copyTool/copyRegistryEntity/copyConfig` so both the
+    existence-check `SELECT`s and the `INSERT`s hit the target. Keep source
+    reads via `getAgent(id, fromTenant)` / `getEdges` (active source DB).
+- **Regression guardrails:**
+  - The `execute()` critical section is fully **synchronous** (SQLite
+    `.exec`/`.get` are sync, no `await`), so `activeTenantId` cannot change
+    mid-copy and the source reads stay valid. Keep it synchronous — do not add
+    `await` inside the transaction.
+  - Guard copies to a tenant that isn't open (previously a silent no-op) with a
+    clear error instead of a crash.
+  - Add a test: copy `dev → prod`, then open `prod` and assert the entities are
+    present and `${prod}.db` is the file that gets synced.
+- See also the broader "request-scoped DB handles" follow-up in `TODO.md` —
+  `activeTenantId` is global mutable state and is racy under concurrency;
+  this fix must not rely on or worsen that. Effort: M, risk: Med.
 
 ---
 
