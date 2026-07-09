@@ -522,6 +522,29 @@ user can access any tenant by setting the header.
 | Publish to registry                        | Yes   | Only when tenant's `registry_protected` is disabled (default) |
 | System info and tenant reset (`/system/*`) | Yes   | 403                                                           |
 
+### Demo Sharing
+
+A demo owner can share a demo with other users in the same tenant as a
+**viewer** (read-only) or **editor** (full control except deletion). Access is
+resolved per request by `control-plane/src/api/demos/access.ts`, which folds
+together ownership, `demo_share` grants, and admin status into a single role.
+Sharing does **not** create any new Cloud Run IAM binding — viewers reach the
+demo through the authenticated `/web/d/{slug}` proxy and editors mutate it
+through `/api/demos/*` under the owner's storage scope.
+
+| Capability                      | Owner | Editor | Viewer | Admin |
+| ------------------------------- | ----- | ------ | ------ | ----- |
+| View / open (`/web/d/{slug}`)   | Yes   | Yes    | Yes    | Yes   |
+| Deploy, stop, update, download  | Yes   | Yes    | No     | Yes   |
+| Manage shares (invite / revoke) | Yes   | Yes    | No     | Yes   |
+| Delete the demo                 | Yes   | No     | No     | Yes   |
+
+Share targets are validated against `AR_ALLOWED_DOMAINS` (the same allow-list
+used at auth time). When a slug is shared by more than one owner, the proxy
+returns a `300 Multiple Choices` disambiguation page and callers pass
+`?owner={email}` to pick one. See
+[RFC-010](rfc/rfc-010-demo-sharing.md) for the full design.
+
 ---
 
 ## Secret Rotation

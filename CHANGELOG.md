@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file. This projec
 
 ### Features
 
+- Add demo sharing with viewer and editor roles (RFC-010). Owners can share a
+  demo with other users in the same tenant without changing any Cloud Run IAM.
+  - Data: new per-tenant `demo_share` table (schema v10) keyed by
+    `(owner, slug, member)`, indexed by member for fast "shared with me" lookup.
+  - Control plane: a single `resolveAccess` helper folds ownership, shares, and
+    admin status into one role; new `GET /:name/shares`, `POST /:name/shares`,
+    `DELETE /:name/shares/:member`, and `GET /members` endpoints; `GET /` and
+    `GET /:name` now return `role` and `accessUrl`; the proxy carries `?owner=`
+    and returns a `300` disambiguation page for slugs shared by multiple owners.
+  - Web: role badges, capability-gated actions, and a per-demo Share panel.
+  - Slack: `demo share`, `demo unshare`, and `demo shares` subcommands, plus
+    shared demos (with a role suffix) in `demos`; optional DM to the new member.
+  - Audit: create/update/revoke logged as `demo-share`.
+
+- Add telemetry clients and API keys (RFC-008). Telemetry ingest is now gated by
+  a write-only, per-client API key instead of a Google identity, while reading
+  telemetry and managing clients require admin identity.
+  - Data: new per-tenant `telemetry_client` table (schema v9); keys stored only
+    as SHA-256 hashes (optional `AR_TELEMETRY_KEY_PEPPER`), plaintext shown once.
+  - Control plane: `telemetryKeyAuth` middleware (`X-Telemetry-Key` header) for
+    `POST /telemetry`; admin-only client CRUD under `/telemetry/clients`; reads
+    tightened to admin-only; the bound client name is stamped on ingested events.
+  - Web: a Clients tab on the telemetry page to create, rotate, and revoke keys
+    with a one-time key reveal modal.
+  - Audit: create/rotate/revoke logged as `telemetry-client`; ingest excluded
+    from middleware auditing.
+
 - Add clear-builds: remove old Artifact Registry images and GCS source
   archives per agent, keeping only the latest deployed version. Reduces GCP
   storage costs without affecting audit logs or the running service.

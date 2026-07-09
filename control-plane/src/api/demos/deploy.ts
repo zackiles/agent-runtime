@@ -119,6 +119,66 @@ function runUrl(cfg: GcpConfig, ...segments: string[]): string {
 
 export type Visibility = 'public' | 'private'
 
+export function demoAccessUrl(
+  meta: { name: string; url?: string; visibility?: Visibility },
+  cpBase: string,
+): string {
+  if (meta.visibility !== 'private') return meta.url || ''
+  const base = cpBase.replace(/\/+$/, '')
+  return base ? `${base}/web/d/${meta.name}` : (meta.url || '')
+}
+
+export type IamCondition = {
+  expression: string
+  title?: string
+  description?: string
+}
+
+export type IamBinding = {
+  role: string
+  members: string[]
+  condition?: IamCondition
+  [key: string]: unknown
+}
+
+const INVOKER_ROLE = 'roles/run.invoker'
+const PUBLIC_MEMBER = 'allUsers'
+
+const isUnconditionalInvoker = (b: IamBinding): boolean =>
+  b.role === INVOKER_ROLE && !b.condition
+
+export function nextDemoBindings(
+  visibility: Visibility,
+  existing: readonly IamBinding[],
+  proxyMember?: string,
+): IamBinding[] {
+  const managed = (members: string[]): string[] => {
+    const kept = members.filter(
+      (m) => m !== PUBLIC_MEMBER && m !== proxyMember,
+    )
+    if (proxyMember) kept.push(proxyMember)
+    if (visibility === 'public') kept.push(PUBLIC_MEMBER)
+    return kept
+  }
+
+  const result: IamBinding[] = []
+  let touchedInvoker = false
+  for (const b of existing) {
+    if (!isUnconditionalInvoker(b)) {
+      result.push(b)
+      continue
+    }
+    touchedInvoker = true
+    const next = managed(b.members || [])
+    if (next.length > 0) result.push({ ...b, members: next })
+  }
+  if (!touchedInvoker) {
+    const seed = managed([])
+    if (seed.length > 0) result.push({ role: INVOKER_ROLE, members: seed })
+  }
+  return result
+}
+
 async function setServiceAccess(
   cfg: GcpConfig,
   svc: string,
@@ -131,9 +191,15 @@ async function setServiceAccess(
     'Content-Type': 'application/json',
   }
 
-  const role = 'roles/run.invoker'
-  const member = 'allUsers'
-  void visibility
+  const proxyMember = cfg.runtimeAccount
+    ? `serviceAccount:${cfg.runtimeAccount}`
+    : undefined
+  if (!proxyMember && visibility === 'private') {
+    logger.warn(
+      'No runtime account set; private demo will be unreachable via proxy',
+      { service: svc },
+    )
+  }
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
@@ -153,24 +219,24 @@ async function setServiceAccess(
     }
 
     const existing = await policyRes.json() as {
-      bindings?: Array<{ role: string; members: string[] }>
+      bindings?: IamBinding[]
       etag?: string
     }
-
-    const hasBinding = (existing.bindings || []).some((b) =>
-      b.role === role && b.members?.includes(member)
-    )
-    if (hasBinding) return
-
-    const bindings = (existing.bindings || [])
-      .filter((b) => b.role !== role)
-    bindings.push({ role, members: [member] })
+    const current = existing.bindings || []
+    const invoker = current.find(isUnconditionalInvoker)
+    const hasPublic = !!invoker?.members?.includes(PUBLIC_MEMBER)
+    const hasProxy = !proxyMember ||
+      !!invoker?.members?.includes(proxyMember)
+    if (hasPublic === (visibility === 'public') && hasProxy) return
 
     const setRes = await fetch(`${svcResource}:setIamPolicy`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        policy: { bindings, etag: existing.etag },
+        policy: {
+          bindings: nextDemoBindings(visibility, current, proxyMember),
+          etag: existing.etag,
+        },
       }),
     })
 
@@ -183,7 +249,10 @@ async function setServiceAccess(
     })
   }
 
-  logger.error('Failed to set public access after retries', { service: svc })
+  logger.error('Failed to set service access after retries', {
+    service: svc,
+    visibility,
+  })
 }
 
 let demoRepoCreated = false

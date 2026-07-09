@@ -344,6 +344,27 @@ developer access without custom audience configuration.
 
 Domain restrictions can be applied via `AR_ALLOWED_DOMAINS`.
 
+### Telemetry Ingest Authentication
+
+Posting telemetry (`POST /telemetry`) is gated by a **telemetry API key**
+(`X-Telemetry-Key` header), not a Google identity. Admins mint per-client keys
+on the telemetry page; reading telemetry and managing clients remain behind
+admin identity. See [docs/telemetry.md](docs/telemetry.md) for the full design.
+
+`AR_TELEMETRY_KEY_PEPPER` is an **optional** server-side secret mixed into the
+SHA-256 hash of every telemetry key before it is stored. Keys are never stored
+in plaintext; the pepper adds defense in depth so that a leaked database cannot
+be brute-forced into usable keys even with a weak random source. It is optional
+— if unset, keys are hashed without a pepper and the feature works normally.
+
+> **Setting or changing the pepper after keys exist invalidates every existing
+> key** (their stored hashes no longer match). Treat pepper rotation as a
+> deliberate fleet-wide revocation that must be coordinated with re-issuing keys.
+
+It is wired through the standard secrets mapping in `default-settings.jsonc`
+(`ar-telemetry-key-pepper` → `AR_TELEMETRY_KEY_PEPPER`), so the deploy pipeline
+injects it as an env var with no extra Cloud Run wiring.
+
 ### Agent Function Environment
 
 When a control plane URL is configured (i.e. after `ar cp deploy`), agent

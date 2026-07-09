@@ -22,9 +22,14 @@ async function auditMiddleware(
 
   if (!MUTATION_METHODS.includes(c.req.method)) return
 
-  const { tenantId, email } = context(c)
   const path = new URL(c.req.url).pathname
 
+  // Ingest is excluded to avoid flooding the audit table at telemetry volume;
+  // client management is audited explicitly by its handlers with the correct
+  // entity type and id.
+  if (path === '/telemetry' || path.startsWith('/telemetry/')) return
+
+  const { tenantId, email } = context(c)
   const parts = path.split('/').filter(Boolean)
   const rawType = parts[0] || 'unknown'
   const entityType = ENTITY_TYPES[rawType] ?? rawType

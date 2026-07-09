@@ -1,7 +1,7 @@
 import type { Database } from '@db/sqlite'
 import { TOOLS } from '../defaults/tools.ts'
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 10
 
 const MIGRATIONS: string[] = [
   `
@@ -338,6 +338,44 @@ SELECT id, tenant_id, name, slug, version, version,
 FROM rule;
 DROP TABLE rule;
 ALTER TABLE rule_new RENAME TO rule;
+`,
+  `
+CREATE TABLE IF NOT EXISTS telemetry_client (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_last_four TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES user(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  rotated_at TEXT,
+  last_used_at TEXT,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_client_tenant
+  ON telemetry_client(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_client_hash
+  ON telemetry_client(key_hash);
+`,
+  `
+CREATE TABLE IF NOT EXISTS demo_share (
+  tenant_id  TEXT NOT NULL REFERENCES tenant(id),
+  owner_id   TEXT NOT NULL,
+  slug       TEXT NOT NULL,
+  member_id  TEXT NOT NULL,
+  role       TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+  granted_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (tenant_id, owner_id, slug, member_id)
+);
+
+CREATE INDEX IF NOT EXISTS demo_share_member
+  ON demo_share (tenant_id, member_id);
+CREATE INDEX IF NOT EXISTS demo_share_demo
+  ON demo_share (tenant_id, owner_id, slug);
 `,
 ]
 

@@ -33,6 +33,7 @@ Deno tasks run from `cli/`. Web tasks run from `web/`.
 - `deno task check`: Format, lint, type-check
 - `deno task test`: Run tests
 - `deno task build`: Production build
+- `deno task hooks`: Enable the git pre-commit hook (run once after cloning)
 - `npm run dev` (web/): Vite dev with mock API
 
 ## Packages
@@ -254,6 +255,15 @@ curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/api/agents
 curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/system
 curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/api/registry/status
 curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/audit
+
+# Reading telemetry needs an admin identity:
+curl -H "Authorization: Bearer $TOKEN" https://<cp-url>/telemetry
+
+# Ingesting telemetry needs a telemetry API key (NOT an identity token):
+curl -X POST https://<cp-url>/telemetry \
+  -H "X-Telemetry-Key: artk.live.<tenantId>.<secret>" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"agent.deploy","timestamp":1712200000000}'
 ```
 
 Key diagnostic endpoints:
@@ -265,7 +275,9 @@ Key diagnostic endpoints:
 | `GET /api/registry/status`                    | Yes   | Registry sync state                                       |
 | `GET /runtime/status`                         | Yes   | Runtime config and mode                                   |
 | `GET /audit`                                  | Yes   | Audit trail of mutations                                  |
-| `GET /telemetry`                              | Admin | Telemetry records                                         |
+| `GET /telemetry`                              | Admin | Telemetry records (admin identity only)                   |
+| `POST /telemetry`                             | Key   | Ingest events; needs `X-Telemetry-Key`, not an identity   |
+| `GET /telemetry/clients`                      | Admin | Telemetry clients (mint/rotate/revoke keys)               |
 | `GET /agents/:id/deploy/status`               | Yes   | Agent deploy progress                                     |
 | `GET /api/artifacts/builds`                   | Yes   | Recent Cloud Build jobs                                   |
 | `DELETE /api/artifacts/packages/:name/builds` | Admin | Clear old builds, keep latest deployed                    |
@@ -333,6 +345,9 @@ gcloud secrets versions access latest --secret=<name> --project=<project>
 
 - Semantic commits focusing on "why"
 - Run `deno task check` before committing
+- Run `deno task hooks` once after cloning to enable the pre-commit hook
+  (`.githooks/pre-commit`), which auto-formats staged files so commits never
+  carry `deno fmt` drift
 - `sdk-agent-nodejs/bin/` and `default-registry/tools/*/[0-9]*/tool` tracked by git LFS
 - When bumping the version in `cli/deno.jsonc`, add a matching entry to
   `CHANGELOG.md` summarising what changed in that release

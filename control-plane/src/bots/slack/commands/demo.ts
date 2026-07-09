@@ -3,6 +3,7 @@ import type { Action } from 'npm:@slack/types@2'
 import { loadMeta, slugify, storeMeta } from '@ar/client/operations/demos'
 import type { DemoMeta } from '@ar/client/operations/demos'
 import {
+  demoAccessUrl,
   deployContainer,
   destroyContainer,
   findDemoAgent,
@@ -11,6 +12,12 @@ import {
   signFiles,
 } from '../../../api/demos/deploy.ts'
 import type { Visibility } from '../../../api/demos/deploy.ts'
+import { can, isAmbiguous, resolveAccess } from '../../../api/demos/access.ts'
+import { notifyShare } from '../../../api/demos/notify.ts'
+import * as demoShares from '@ar/client/db/demo-shares'
+import { ensure, isAdmin } from '@ar/client/db/users'
+import { log as auditLog } from '@ar/client/db/audit'
+import { validateDomain } from '../../../middleware/auth.ts'
 import platform from '@ar/client/platform'
 import { DEFAULT_SUBSYSTEM } from '@ar/client/subsystems'
 import { slash, threadOpts } from '../utils.ts'
@@ -92,16 +99,19 @@ function statusIcon(status?: string): string {
   return STATUS_ICONS[status || 'created'] || ':white_circle:'
 }
 
-function webDemosUrl(): string {
-  const cpUrl = Deno.env.get('AR_AUDIENCE') ||
+function cpBase(): string {
+  return Deno.env.get('AR_AUDIENCE') ||
     Deno.env.get('AR_CONTROL_PLANE_URL') || ''
-  return cpUrl ? `${cpUrl}/web/demos` : ''
+}
+
+function webDemosUrl(): string {
+  const base = cpBase()
+  return base ? `${base}/web/demos` : ''
 }
 
 function archiveUrl(name: string): string {
-  const cpUrl = Deno.env.get('AR_AUDIENCE') ||
-    Deno.env.get('AR_CONTROL_PLANE_URL') || ''
-  return cpUrl ? `${cpUrl}/api/demos/${name}/archive` : ''
+  const base = cpBase()
+  return base ? `${base}/api/demos/${name}/archive` : ''
 }
 
 function resultButtons(meta: DemoMeta): Action[] {
@@ -110,7 +120,7 @@ function resultButtons(meta: DemoMeta): Action[] {
     buttons.push({
       type: 'button',
       text: { type: 'plain_text', text: 'View' },
-      url: meta.url,
+      url: demoAccessUrl(meta, cpBase()),
       style: 'primary',
     } as unknown as Action)
   }
@@ -170,7 +180,7 @@ function demoResultCard(title: string, meta: DemoMeta) {
     `*Visibility:* ${vis}`,
   ]
   if (meta.url && meta.status === 'running') {
-    lines.push(`*URL:* <${meta.url}>`)
+    lines.push(`*URL:* <${demoAccessUrl(meta, cpBase())}>`)
   }
   if (meta.summary) lines.push(`*Summary:* ${meta.summary}`)
   const web = webDemosUrl()
@@ -191,7 +201,7 @@ function demoCard(title: string, meta: DemoMeta) {
     `*Visibility:* ${vis}`,
   ]
   if (meta.url && meta.status === 'running') {
-    lines.push(`*URL:* <${meta.url}>`)
+    lines.push(`*URL:* <${demoAccessUrl(meta, cpBase())}>`)
   }
   if (meta.summary) lines.push(`*Summary:* ${meta.summary}`)
   const web = webDemosUrl()
@@ -519,6 +529,176 @@ async function handleDownload(
   })
 }
 
+// Slack auto-links emails as `<mailto:bob@corp.com|bob@corp.com>`; recover the
+// bare address so share targets can be typed naturally.
+function parseEmail(token: string): string {
+  const mailto = token.match(/^<mailto:([^|>]+)/)
+  return (mailto ? mailto[1] : token).trim().toLowerCase()
+}
+
+async function resolveForShare(
+  email: string,
+  tenantId: string,
+  name: string,
+) {
+  const { project } = gcpConfig()
+  const slug = slugify(name)
+  const access = await resolveAccess(
+    project,
+    tenantId,
+    email,
+    isAdmin(email),
+    slug,
+  )
+  if (isAmbiguous(access)) {
+    throw new Error(
+      `Multiple demos named \`${slug}\` are shared with you (owners: ` +
+        `${access.owners.join(', ')}). Manage them from the web UI.`,
+    )
+  }
+  if (!access) throw new Error(`Demo \`${slug}\` not found.`)
+  return access
+}
+
+async function handleShare(
+  client: WebClient,
+  channel: string,
+  email: string,
+  tenantId: string,
+  name: string,
+  memberToken: string,
+  roleToken: string | undefined,
+  threadTs?: string,
+): Promise<void> {
+  const access = await resolveForShare(email, tenantId, name)
+  if (!can(access.role, 'manage-shares')) {
+    throw new Error(
+      `You do not have permission to share \`${access.meta.name}\`.`,
+    )
+  }
+
+  const member = parseEmail(memberToken)
+  if (!member.includes('@')) {
+    throw new Error('Provide a valid email to share with.')
+  }
+  const role = roleToken === 'editor' ? 'editor' : 'viewer'
+
+  if (!validateDomain(member)) {
+    throw new Error(`\`${member}\` is not in an allowed domain.`)
+  }
+  if (member === access.ownerId.toLowerCase()) {
+    throw new Error('The owner already has full access.')
+  }
+  if (member === email.toLowerCase()) {
+    throw new Error('You cannot change your own access.')
+  }
+
+  ensure(member)
+  demoShares.upsert(tenantId, {
+    ownerId: access.ownerId,
+    slug: access.meta.name,
+    memberId: member,
+    role,
+    grantedBy: email,
+  })
+  auditLog(
+    tenantId,
+    'demo-share',
+    `${access.ownerId}/${access.meta.name}`,
+    'created',
+    email,
+    { member, role },
+  )
+  await notifyShare({
+    tenantId,
+    member,
+    grantedBy: email,
+    ownerId: access.ownerId,
+    slug: access.meta.name,
+    role,
+  })
+
+  await client.chat.postMessage({
+    channel,
+    ...threadOpts(threadTs),
+    text:
+      `:white_check_mark: Shared \`${access.meta.name}\` with *${member}* as *${role}*.`,
+  })
+}
+
+async function handleUnshare(
+  client: WebClient,
+  channel: string,
+  email: string,
+  tenantId: string,
+  name: string,
+  memberToken: string,
+  threadTs?: string,
+): Promise<void> {
+  const access = await resolveForShare(email, tenantId, name)
+  if (!can(access.role, 'manage-shares')) {
+    throw new Error(
+      `You do not have permission to manage \`${access.meta.name}\`.`,
+    )
+  }
+
+  const member = parseEmail(memberToken)
+  if (member === access.ownerId.toLowerCase()) {
+    throw new Error('Cannot remove the owner.')
+  }
+
+  demoShares.remove(tenantId, access.ownerId, access.meta.name, member)
+  auditLog(
+    tenantId,
+    'demo-share',
+    `${access.ownerId}/${access.meta.name}`,
+    'deleted',
+    email,
+    { member },
+  )
+
+  await client.chat.postMessage({
+    channel,
+    ...threadOpts(threadTs),
+    text: `:wastebasket: Removed *${member}* from \`${access.meta.name}\`.`,
+  })
+}
+
+async function handleShares(
+  client: WebClient,
+  channel: string,
+  email: string,
+  tenantId: string,
+  name: string,
+  threadTs?: string,
+): Promise<void> {
+  const access = await resolveForShare(email, tenantId, name)
+  if (!can(access.role, 'manage-shares')) {
+    throw new Error(
+      `You do not have permission to view shares for \`${access.meta.name}\`.`,
+    )
+  }
+
+  const shares = demoShares.forDemo(tenantId, access.ownerId, access.meta.name)
+  const lines = [
+    `*Shares for* \`${access.meta.name}\` *(owner: ${access.ownerId})*`,
+  ]
+  if (shares.length === 0) {
+    lines.push('_Not shared with anyone yet._')
+  } else {
+    for (const s of shares) {
+      lines.push(`• ${s.memberId} — *${s.role}*`)
+    }
+  }
+
+  await client.chat.postMessage({
+    channel,
+    ...threadOpts(threadTs),
+    blocks: buildResponse({ title: 'Demo Shares', body: lines.join('\n') }),
+    text: `${shares.length} share(s)`,
+  })
+}
+
 const USAGE = [
   '*Demo Commands:*',
   '`demo {prompt}` — Create and deploy a new demo',
@@ -527,6 +707,9 @@ const USAGE = [
   '`demo delete {name}` — Delete a demo',
   '`demo visibility {name} public|private` — Change visibility',
   '`demo download {name}` — Get source download link',
+  '`demo share {name} {email} [viewer|editor]` — Share a demo',
+  '`demo unshare {name} {email}` — Revoke access',
+  '`demo shares {name}` — List who a demo is shared with',
   '`demos` — List your demos',
 ].join('\n')
 
@@ -598,12 +781,48 @@ async function handle(
   if (sub === 'download' && tokens[1]) {
     return handleDownload(client, channel, tokens[1], threadTs)
   }
+  if (sub === 'share' && tokens[1] && tokens[2]) {
+    return handleShare(
+      client,
+      channel,
+      email,
+      tenantId,
+      tokens[1],
+      tokens[2],
+      tokens[3]?.toLowerCase(),
+      threadTs,
+    )
+  }
+  if (sub === 'unshare' && tokens[1] && tokens[2]) {
+    return handleUnshare(
+      client,
+      channel,
+      email,
+      tenantId,
+      tokens[1],
+      tokens[2],
+      threadTs,
+    )
+  }
+  if (sub === 'shares' && tokens[1]) {
+    return handleShares(client, channel, email, tenantId, tokens[1], threadTs)
+  }
 
   if (
     ['deploy', 'stop', 'delete', 'visibility', 'download'].includes(sub) &&
     !tokens[1]
   ) {
     throw new Error(`Missing demo name. Usage: \`demo ${sub} {name}\``)
+  }
+  if (sub === 'shares' && !tokens[1]) {
+    throw new Error('Missing demo name. Usage: `demo shares {name}`')
+  }
+  if ((sub === 'share' || sub === 'unshare') && (!tokens[1] || !tokens[2])) {
+    throw new Error(
+      `Usage: \`demo ${sub} {name} {email}${
+        sub === 'share' ? ' [viewer|editor]' : ''
+      }\``,
+    )
   }
 
   return handleCreateOrUpdate(

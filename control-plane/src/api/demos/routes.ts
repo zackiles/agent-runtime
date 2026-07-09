@@ -1,4 +1,5 @@
 import { Hono } from '@hono/hono'
+import type { Context } from '@hono/hono'
 import { context } from '../../types.ts'
 import type { Env } from '../../types.ts'
 import {
@@ -9,10 +10,15 @@ import {
   slugify,
   storeMeta,
 } from '@ar/client/operations/demos'
+import type { DemoMeta } from '@ar/client/operations/demos'
 import platform from '@ar/client/platform'
 import logger from '@ar/client/utils/logger'
 import { DEFAULT_SUBSYSTEM } from '@ar/client/subsystems'
 import { encodeBase64 } from '@std/encoding/base64'
+import { ensure, list as listUsers } from '@ar/client/db/users'
+import * as demoShares from '@ar/client/db/demo-shares'
+import { log as auditLog } from '@ar/client/db/audit'
+import { validateDomain } from '../../middleware/auth.ts'
 import {
   deleteImage,
   deployContainer,
@@ -23,6 +29,9 @@ import {
   signFiles,
 } from './deploy.ts'
 import type { Visibility } from './deploy.ts'
+import { can, isAmbiguous, resolveAccess } from './access.ts'
+import type { Access, AccessRole, Action } from './access.ts'
+import { notifyShare } from './notify.ts'
 
 const DEFAULT_TTL_DAYS = 7
 
@@ -30,24 +39,171 @@ type FileRef = { name: string; path: string }
 
 const app = new Hono<Env>()
 
+function accessUrl(meta: DemoMeta, ownerId: string, role: AccessRole): string {
+  if (meta.visibility !== 'private') return meta.url || `/web/d/${meta.name}`
+  const base = `/web/d/${meta.name}`
+  if (role === 'owner' || role === 'admin') return base
+  return `${base}?owner=${encodeURIComponent(ownerId)}`
+}
+
+function decorate(
+  meta: DemoMeta,
+  ownerId: string,
+  role: AccessRole,
+): DemoMeta & { role: AccessRole; accessUrl: string } {
+  return { ...meta, role, accessUrl: accessUrl(meta, ownerId, role) }
+}
+
+// Resolves the demo the caller is acting on and enforces the capability for the
+// requested action. Returns a ready-to-send error Response on failure so route
+// handlers stay flat.
+async function gate(
+  c: Context<Env>,
+  action: Action,
+): Promise<Access | Response> {
+  const { tenantId, email, isAdmin } = context(c)
+  const { project } = gcpConfig()
+  const name = slugify(c.req.param('name') || '')
+  const owner = c.req.query('owner') || undefined
+  const access = await resolveAccess(
+    project,
+    tenantId,
+    email,
+    isAdmin,
+    name,
+    owner,
+  )
+  if (isAmbiguous(access)) {
+    return c.json(
+      { error: 'Ambiguous demo; specify ?owner=', owners: access.owners },
+      409,
+    )
+  }
+  if (!access) return c.json({ error: 'Demo not found' }, 404)
+  if (!can(access.role, action)) return c.json({ error: 'Forbidden' }, 403)
+  return access
+}
+
 app.get('/', async (c) => {
   const { tenantId, email, isAdmin } = context(c)
   const { project } = gcpConfig()
   const requestedUser = c.req.query('user')
-  const userId = (requestedUser && isAdmin) ? requestedUser : email
-  const demos = await listDemos(project, tenantId, userId)
-  return c.json(demos)
+
+  if (requestedUser && isAdmin && requestedUser !== email) {
+    const demos = await listDemos(project, tenantId, requestedUser)
+    return c.json(
+      demos.map((d) => decorate(d, d.createdBy || requestedUser, 'admin')),
+    )
+  }
+
+  const owned = await listDemos(project, tenantId, email)
+  const result = owned.map((d) => decorate(d, email, 'owner'))
+  const seen = new Set(owned.map((d) => `${email}:${d.name}`))
+
+  for (const share of demoShares.forMember(tenantId, email)) {
+    const key = `${share.ownerId}:${share.slug}`
+    if (seen.has(key)) continue
+    const meta = await loadMeta(project, tenantId, share.ownerId, share.slug)
+    if (!meta) continue
+    seen.add(key)
+    result.push(decorate(meta, share.ownerId, share.role))
+  }
+
+  return c.json(result)
+})
+
+app.get('/members', (c) => {
+  return c.json(
+    listUsers().map((u) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin })),
+  )
 })
 
 app.get('/:name', async (c) => {
-  const { tenantId, email, isAdmin } = context(c)
-  const { project } = gcpConfig()
-  const name = slugify(c.req.param('name'))
-  const requestedUser = c.req.query('user')
-  const userId = (requestedUser && isAdmin) ? requestedUser : email
-  const meta = await loadMeta(project, tenantId, userId, name)
-  if (!meta) return c.json({ error: 'Demo not found' }, 404)
-  return c.json(meta)
+  const gated = await gate(c, 'view')
+  if (gated instanceof Response) return gated
+  return c.json(decorate(gated.meta, gated.ownerId, gated.role))
+})
+
+app.get('/:name/shares', async (c) => {
+  const gated = await gate(c, 'manage-shares')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
+  const shares = demoShares.forDemo(tenantId, gated.ownerId, gated.meta.name)
+  return c.json({ owner: gated.ownerId, shares })
+})
+
+app.post('/:name/shares', async (c) => {
+  const gated = await gate(c, 'manage-shares')
+  if (gated instanceof Response) return gated
+  const { tenantId, email } = context(c)
+
+  const body = await c.req.json().catch(() => ({})) as {
+    member?: string
+    role?: string
+  }
+  const member = (body.member || '').trim().toLowerCase()
+  if (!member) return c.json({ error: 'member is required' }, 400)
+  const role = body.role === 'editor' ? 'editor' : 'viewer'
+
+  if (!validateDomain(member)) {
+    return c.json({ error: 'Member domain not allowed' }, 403)
+  }
+  if (member === gated.ownerId.toLowerCase()) {
+    return c.json({ error: 'Owner already has full access' }, 400)
+  }
+  if (member === email.toLowerCase()) {
+    return c.json({ error: 'You cannot change your own access' }, 400)
+  }
+
+  ensure(member)
+  demoShares.upsert(tenantId, {
+    ownerId: gated.ownerId,
+    slug: gated.meta.name,
+    memberId: member,
+    role,
+    grantedBy: email,
+  })
+  auditLog(
+    tenantId,
+    'demo-share',
+    `${gated.ownerId}/${gated.meta.name}`,
+    'created',
+    email,
+    { member, role },
+  )
+
+  await notifyShare({
+    tenantId,
+    member,
+    grantedBy: email,
+    ownerId: gated.ownerId,
+    slug: gated.meta.name,
+    role,
+  })
+
+  return c.json({ ok: true, member, role })
+})
+
+app.delete('/:name/shares/:member', async (c) => {
+  const gated = await gate(c, 'manage-shares')
+  if (gated instanceof Response) return gated
+  const { tenantId, email } = context(c)
+  const member = decodeURIComponent(c.req.param('member')).toLowerCase()
+
+  if (member === gated.ownerId.toLowerCase()) {
+    return c.json({ error: 'Cannot remove the owner' }, 403)
+  }
+
+  demoShares.remove(tenantId, gated.ownerId, gated.meta.name, member)
+  auditLog(
+    tenantId,
+    'demo-share',
+    `${gated.ownerId}/${gated.meta.name}`,
+    'deleted',
+    email,
+    { member },
+  )
+  return c.json({ ok: true })
 })
 
 function sseStream(
@@ -158,11 +314,11 @@ app.post('/', async (c) => {
 })
 
 app.post('/:name/deploy', async (c) => {
-  const { tenantId, email } = context(c)
+  const gated = await gate(c, 'deploy')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
   const cfg = gcpConfig()
-  const name = slugify(c.req.param('name'))
-  const meta = await loadMeta(cfg.project, tenantId, email, name)
-  if (!meta) return c.json({ error: 'Demo not found' }, 404)
+  const { ownerId, meta } = gated
 
   let visibility: Visibility = meta.visibility === 'public'
     ? 'public'
@@ -179,14 +335,17 @@ app.post('/:name/deploy', async (c) => {
     const serviceUrl = await deployContainer(
       cfg,
       tenantId,
-      email,
+      ownerId,
       meta,
       visibility,
     )
     meta.url = serviceUrl
     meta.status = 'running'
+    // Editors can change visibility, so persist the resolved value back to
+    // demo.json (the pre-RFC-010 deploy route dropped it).
+    meta.visibility = visibility
     meta.updatedAt = new Date().toISOString()
-    await storeMeta(cfg.project, tenantId, email, meta)
+    await storeMeta(cfg.project, tenantId, ownerId, meta)
     return c.json({ url: serviceUrl, status: 'deployed', visibility })
   } catch (err) {
     logger.error('Demo deploy failed', err)
@@ -197,17 +356,17 @@ app.post('/:name/deploy', async (c) => {
 })
 
 app.post('/:name/stop', async (c) => {
-  const { tenantId, email } = context(c)
+  const gated = await gate(c, 'stop')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
   const cfg = gcpConfig()
-  const name = slugify(c.req.param('name'))
-  const meta = await loadMeta(cfg.project, tenantId, email, name)
-  if (!meta) return c.json({ error: 'Demo not found' }, 404)
+  const { ownerId, meta } = gated
 
   try {
-    await destroyContainer(cfg, tenantId, email, name)
+    await destroyContainer(cfg, tenantId, ownerId, meta.name)
     meta.status = 'stopped'
     meta.updatedAt = new Date().toISOString()
-    await storeMeta(cfg.project, tenantId, email, meta)
+    await storeMeta(cfg.project, tenantId, ownerId, meta)
     return c.json({ status: 'stopped' })
   } catch (err) {
     logger.error('Demo stop failed', err)
@@ -218,37 +377,41 @@ app.post('/:name/stop', async (c) => {
 })
 
 app.delete('/:name', async (c) => {
-  const { tenantId, email } = context(c)
+  const gated = await gate(c, 'delete')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
   const cfg = gcpConfig()
-  const name = slugify(c.req.param('name'))
-  const meta = await loadMeta(cfg.project, tenantId, email, name)
-  if (!meta) return c.json({ error: 'Demo not found' }, 404)
+  const { ownerId, meta } = gated
+  const name = meta.name
 
   if (meta.status === 'running') {
     try {
-      await destroyContainer(cfg, tenantId, email, name)
+      await destroyContainer(cfg, tenantId, ownerId, name)
     } catch {
       logger.warn(`Failed to destroy container for demo ${name}`)
     }
   }
 
   try {
-    await deleteImage(cfg, tenantId, email, name)
+    await deleteImage(cfg, tenantId, ownerId, name)
   } catch {
     logger.warn(`Failed to delete image for demo ${name}`)
   }
 
-  await deleteDemoStorage(cfg.project, tenantId, email, name)
+  await deleteDemoStorage(cfg.project, tenantId, ownerId, name)
+  demoShares.remove(tenantId, ownerId, name)
   return c.json({ message: 'Deleted' })
 })
 
 app.get('/:name/download', async (c) => {
-  const { tenantId, email } = context(c)
+  const gated = await gate(c, 'download')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
   const { project } = gcpConfig()
-  const name = slugify(c.req.param('name'))
+  const { ownerId, meta } = gated
 
   try {
-    const raw = await downloadSource(project, tenantId, email, name)
+    const raw = await downloadSource(project, tenantId, ownerId, meta.name)
     const files: Record<string, string> = {}
     for (const [filename, data] of Object.entries(raw)) {
       files[filename] = encodeBase64(data)
@@ -262,12 +425,15 @@ app.get('/:name/download', async (c) => {
 })
 
 app.get('/:name/archive', async (c) => {
-  const { tenantId, email } = context(c)
+  const gated = await gate(c, 'download')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
   const cfg = gcpConfig()
-  const name = slugify(c.req.param('name'))
+  const { ownerId, meta } = gated
+  const name = meta.name
 
   const bucket = `${cfg.project}-ar-registry`
-  const archivePath = `${tenantId}/demos/${email}/${name}/source.tar.gz`
+  const archivePath = `${tenantId}/demos/${ownerId}/${name}/source.tar.gz`
 
   try {
     const exists = await platform.storageExists(bucket, archivePath)
@@ -281,7 +447,7 @@ app.get('/:name/archive', async (c) => {
       return c.redirect(url, 302)
     }
 
-    const raw = await downloadSource(cfg.project, tenantId, email, name)
+    const raw = await downloadSource(cfg.project, tenantId, ownerId, name)
     const entries = Object.entries(raw)
     if (entries.length === 0) {
       return c.json({ error: 'No source files found' }, 404)
@@ -314,11 +480,12 @@ app.get('/:name/archive', async (c) => {
 })
 
 app.post('/:name/update', async (c) => {
-  const { tenantId, email } = context(c)
+  const gated = await gate(c, 'update')
+  if (gated instanceof Response) return gated
+  const { tenantId } = context(c)
   const cfg = gcpConfig()
-  const name = slugify(c.req.param('name'))
-  const meta = await loadMeta(cfg.project, tenantId, email, name)
-  if (!meta) return c.json({ error: 'Demo not found' }, 404)
+  const { ownerId, meta } = gated
+  const name = meta.name
 
   const body = await c.req.json() as {
     prompt: string
@@ -352,8 +519,8 @@ app.post('/:name/update', async (c) => {
       prompt: body.prompt,
       name,
       subsystem,
-      createdBy: email,
-      storagePrefix: `${tenantId}/demos/${email}`,
+      createdBy: ownerId,
+      storagePrefix: `${tenantId}/demos/${ownerId}`,
       files: signedFiles,
       existingDemo: current,
     })
@@ -361,11 +528,11 @@ app.post('/:name/update', async (c) => {
     if (result.demo) {
       emit('saving', 'Storing updated demo...')
       result.demo.name = name
-      result.demo.createdBy = email
+      result.demo.createdBy = ownerId
       result.demo.status = current.status || 'created'
       result.demo.createdAt = current.createdAt
       result.demo.updatedAt = new Date().toISOString()
-      await storeMeta(cfg.project, tenantId, email, result.demo)
+      await storeMeta(cfg.project, tenantId, ownerId, result.demo)
 
       if (current.status === 'running') {
         emit('building', 'Building container image...')
@@ -373,7 +540,7 @@ app.post('/:name/update', async (c) => {
           await deployContainer(
             cfg,
             tenantId,
-            email,
+            ownerId,
             result.demo,
             current.visibility || 'private',
           )

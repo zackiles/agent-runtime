@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 
+type AccessRole = 'owner' | 'editor' | 'viewer' | 'admin'
+
 type DemoMeta = {
   name: string
   url: string
@@ -13,7 +15,20 @@ type DemoMeta = {
   createdBy?: string
   status?: string
   visibility?: 'public' | 'private'
+  role?: AccessRole
+  accessUrl?: string
 }
+
+type Share = {
+  ownerId: string
+  slug: string
+  memberId: string
+  role: 'viewer' | 'editor'
+  grantedBy: string
+  createdAt: string
+}
+
+type Member = { id: string; name: string; isAdmin: boolean }
 
 type View = 'list' | 'create' | 'feedback'
 
@@ -147,6 +162,21 @@ export function Demos() {
     setTimeout(() => setMessage(null), 4000)
   }
 
+  // Shared demos are keyed by owner on the server; carry the owner so the
+  // route resolves the right demo when the caller is not its owner.
+  function ownerQuery(demo: DemoMeta): string {
+    return demo.role && demo.role !== 'owner' && demo.createdBy
+      ? `?owner=${encodeURIComponent(demo.createdBy)}`
+      : ''
+  }
+
+  // A slug alone no longer identifies a demo: a caller can hold both their own
+  // `foo` and a `foo` shared by someone else. Match on owner + slug so state
+  // updates only touch the card that was actually acted on.
+  function sameDemo(a: DemoMeta, b: DemoMeta): boolean {
+    return a.name === b.name && (a.createdBy || '') === (b.createdBy || '')
+  }
+
   async function streamAgent<T>(
     url: string,
     body: Record<string, unknown>,
@@ -273,10 +303,13 @@ export function Demos() {
       const fileMeta = form.files.length > 0
         ? form.files.map((f) => ({ name: f.name, path: f.path }))
         : undefined
-      await streamAgent(`/api/demos/${editing.name}/update`, {
-        prompt: form.prompt,
-        files: fileMeta,
-      })
+      await streamAgent(
+        `/api/demos/${editing.name}/update${ownerQuery(editing)}`,
+        {
+          prompt: form.prompt,
+          files: fileMeta,
+        },
+      )
       flash(`Demo "${editing.name}" updated.`)
       setView('list')
       reload()
@@ -296,11 +329,14 @@ export function Demos() {
     visibility: 'public' | 'private' = 'private',
   ) {
     try {
-      const res = await api(`/api/demos/${demo.name}/deploy`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visibility }),
-      })
+      const res = await api(
+        `/api/demos/${demo.name}/deploy${ownerQuery(demo)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visibility }),
+        },
+      )
       const result = await checkedJson<{
         url: string
         visibility?: string
@@ -308,7 +344,7 @@ export function Demos() {
       const url = result.url || demo.url
       setDemos((prev) =>
         prev.map((d) =>
-          d.name === demo.name
+          sameDemo(d, demo)
             ? {
               ...d,
               url,
@@ -331,12 +367,12 @@ export function Demos() {
 
   async function handleStop(demo: DemoMeta) {
     try {
-      const res = await api(`/api/demos/${demo.name}/stop`, {
+      const res = await api(`/api/demos/${demo.name}/stop${ownerQuery(demo)}`, {
         method: 'POST',
       })
       await checkedJson(res)
       setDemos((prev) =>
-        prev.map((d) => d.name === demo.name ? { ...d, status: 'stopped' } : d)
+        prev.map((d) => sameDemo(d, demo) ? { ...d, status: 'stopped' } : d)
       )
       flash(`Demo "${demo.name}" stopped.`)
     } catch (err) {
@@ -352,11 +388,11 @@ export function Demos() {
     setSubmitting(true)
     flash(`Deleting "${demo.name}"...`)
     try {
-      const res = await api(`/api/demos/${demo.name}`, {
+      const res = await api(`/api/demos/${demo.name}${ownerQuery(demo)}`, {
         method: 'DELETE',
       })
       await checkedJson(res)
-      setDemos((prev) => prev.filter((d) => d.name !== demo.name))
+      setDemos((prev) => prev.filter((d) => !sameDemo(d, demo)))
       flash(`Demo "${demo.name}" deleted.`)
     } catch (err) {
       flash(
@@ -370,7 +406,9 @@ export function Demos() {
 
   async function handleDownload(demo: DemoMeta) {
     try {
-      const res = await api(`/api/demos/${demo.name}/download`)
+      const res = await api(
+        `/api/demos/${demo.name}/download${ownerQuery(demo)}`,
+      )
       const data = await checkedJson<{
         files: Record<string, string>
       }>(res)
@@ -476,21 +514,25 @@ export function Demos() {
         )
         : (
           <div class='space-y-3'>
-            {demos.map((demo) => (
-              <DemoCard
-                key={demo.name}
-                demo={demo}
-                expanded={expanded === demo.name}
-                onToggle={() =>
-                  setExpanded(expanded === demo.name ? null : demo.name)}
-                onDeploy={(v) => handleDeploy(demo, v)}
-                onStop={() => handleStop(demo)}
-                onDelete={() => handleDelete(demo)}
-                onDownload={() => handleDownload(demo)}
-                onFeedback={() => startFeedback(demo)}
-                isOwner={!demo.createdBy || demo.createdBy === user.email}
-              />
-            ))}
+            {demos.map((demo) => {
+              const key = `${demo.createdBy || ''}:${demo.name}`
+              return (
+                <DemoCard
+                  key={key}
+                  demo={demo}
+                  expanded={expanded === key}
+                  onToggle={() => setExpanded(expanded === key ? null : key)}
+                  onDeploy={(v) => handleDeploy(demo, v)}
+                  onStop={() => handleStop(demo)}
+                  onDelete={() => handleDelete(demo)}
+                  onDownload={() => handleDownload(demo)}
+                  onFeedback={() => startFeedback(demo)}
+                  flash={flash}
+                  userEmail={user.email}
+                  isAdmin={user.isAdmin}
+                />
+              )
+            })}
           </div>
         )}
     </div>
@@ -506,7 +548,9 @@ function DemoCard({
   onDelete,
   onDownload,
   onFeedback,
-  isOwner,
+  flash,
+  userEmail,
+  isAdmin,
 }: {
   demo: DemoMeta
   expanded: boolean
@@ -516,10 +560,17 @@ function DemoCard({
   onDelete: () => void
   onDownload: () => void
   onFeedback: () => void
-  isOwner: boolean
+  flash: (text: string, type?: 'ok' | 'err') => void
+  userEmail: string
+  isAdmin: boolean
 }) {
   const status = demo.status || 'created'
   const vis = demo.visibility || 'private'
+  const role: AccessRole = demo.role ||
+    (!demo.createdBy || demo.createdBy === userEmail ? 'owner' : 'viewer')
+  const canEdit = role === 'owner' || role === 'editor' || isAdmin
+  const accessUrl = demo.accessUrl ||
+    (vis === 'private' ? `/web/d/${demo.name}` : demo.url)
 
   const statusColor = status === 'running'
     ? 'bg-green-50 text-green-700'
@@ -559,6 +610,14 @@ function DemoCard({
           </div>
         </div>
         <div class='flex items-center gap-2'>
+          {role !== 'owner' && (
+            <span
+              class='text-[10px] px-1.5 py-0.5 rounded font-medium bg-indigo-50 text-indigo-700 border border-indigo-200'
+              title={demo.createdBy ? `Owned by ${demo.createdBy}` : undefined}
+            >
+              {role === 'admin' ? 'admin' : `shared: ${role}`}
+            </span>
+          )}
           {status === 'running' && (
             <span
               class={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
@@ -632,12 +691,12 @@ function DemoCard({
                 <dt class='text-gray-500 text-xs'>URL</dt>
                 <dd class='text-gray-900 mt-0.5'>
                   <a
-                    href={demo.url}
+                    href={accessUrl}
                     target='_blank'
                     rel='noopener noreferrer'
                     class='text-blue-600 hover:underline text-xs break-all'
                   >
-                    {demo.url}
+                    {accessUrl}
                   </a>
                 </dd>
               </div>
@@ -660,7 +719,7 @@ function DemoCard({
           )}
 
           <div class='flex gap-2 flex-wrap'>
-            {isOwner && status !== 'running' && (
+            {canEdit && status !== 'running' && (
               <div class='flex items-center gap-1'>
                 <button
                   type='button'
@@ -678,7 +737,7 @@ function DemoCard({
                 </button>
               </div>
             )}
-            {isOwner && status === 'running' && (
+            {canEdit && status === 'running' && (
               <button
                 type='button'
                 onClick={onStop}
@@ -689,12 +748,12 @@ function DemoCard({
             )}
             {status === 'running' && demo.url && (
               <a
-                href={demo.url}
+                href={accessUrl}
                 target='_blank'
                 rel='noopener noreferrer'
                 onClick={(e) => {
                   try {
-                    new URL(demo.url)
+                    new URL(accessUrl, globalThis.location.origin)
                   } catch {
                     e.preventDefault()
                   }
@@ -704,7 +763,7 @@ function DemoCard({
                 Open App
               </a>
             )}
-            {isOwner && (
+            {canEdit && (
               <button
                 type='button'
                 onClick={onFeedback}
@@ -713,7 +772,7 @@ function DemoCard({
                 Send Feedback
               </button>
             )}
-            {isOwner && (
+            {canEdit && (
               <button
                 type='button'
                 onClick={onDownload}
@@ -722,7 +781,7 @@ function DemoCard({
                 Download Source
               </button>
             )}
-            {isOwner && (
+            {canEdit && (
               <button
                 type='button'
                 onClick={onDelete}
@@ -732,9 +791,179 @@ function DemoCard({
               </button>
             )}
           </div>
+
+          {canEdit && <SharePanel demo={demo} role={role} flash={flash} />}
         </div>
       )}
     </div>
+  )
+}
+
+function SharePanel({
+  demo,
+  role,
+  flash,
+}: {
+  demo: DemoMeta
+  role: AccessRole
+  flash: (text: string, type?: 'ok' | 'err') => void
+}) {
+  const [shares, setShares] = useState<Share[]>([])
+  const [members, setMembers] = useState<Member[]>([])
+  const [loading, setLoading] = useState(true)
+  const [member, setMember] = useState('')
+  const [addRole, setAddRole] = useState<'viewer' | 'editor'>('viewer')
+  const [busy, setBusy] = useState(false)
+
+  const ownerParam = role !== 'owner' && demo.createdBy
+    ? `?owner=${encodeURIComponent(demo.createdBy)}`
+    : ''
+
+  function loadShares() {
+    setLoading(true)
+    api(`/api/demos/${demo.name}/shares${ownerParam}`)
+      .then((r) => checkedJson<{ owner: string; shares: Share[] }>(r))
+      .then((d) => setShares(d.shares))
+      .catch(() => setShares([]))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    loadShares()
+    api('/api/demos/members')
+      .then((r) => checkedJson<Member[]>(r))
+      .then(setMembers)
+      .catch(() => setMembers([]))
+  }, [demo.name])
+
+  async function submitShare(m: string, r: 'viewer' | 'editor') {
+    const res = await api(`/api/demos/${demo.name}/shares${ownerParam}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member: m, role: r }),
+    })
+    await checkedJson(res)
+    loadShares()
+  }
+
+  async function addShare(e: Event) {
+    e.preventDefault()
+    const email = member.trim()
+    if (!email) return
+    setBusy(true)
+    try {
+      await submitShare(email, addRole)
+      setMember('')
+      flash(`Shared with ${email} as ${addRole}.`)
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Failed to share.', 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeShare(m: string) {
+    try {
+      const res = await api(
+        `/api/demos/${demo.name}/shares/${encodeURIComponent(m)}${ownerParam}`,
+        { method: 'DELETE' },
+      )
+      await checkedJson(res)
+      flash(`Removed ${m}.`)
+      loadShares()
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Failed to remove.', 'err')
+    }
+  }
+
+  return (
+    <details class='mt-4 border-t border-gray-100 pt-3'>
+      <summary class='text-xs font-medium text-gray-600 cursor-pointer hover:text-gray-800'>
+        Share{shares.length > 0 ? ` (${shares.length})` : ''}
+      </summary>
+      <div class='mt-3 space-y-3'>
+        {loading
+          ? <p class='text-xs text-gray-400'>Loading shares...</p>
+          : shares.length === 0
+          ? <p class='text-xs text-gray-400'>Not shared with anyone yet.</p>
+          : (
+            <div class='space-y-1'>
+              {shares.map((s) => (
+                <div
+                  key={s.memberId}
+                  class='flex items-center justify-between gap-2 px-3 py-1.5 bg-gray-50 rounded-md text-sm'
+                >
+                  <span class='text-gray-700 text-xs truncate'>
+                    {s.memberId}
+                  </span>
+                  <div class='flex items-center gap-2'>
+                    <select
+                      value={s.role}
+                      onChange={(e) =>
+                        submitShare(
+                          s.memberId,
+                          (e.target as HTMLSelectElement).value as
+                            | 'viewer'
+                            | 'editor',
+                        ).catch((err) =>
+                          flash(
+                            err instanceof Error
+                              ? err.message
+                              : 'Failed to update.',
+                            'err',
+                          )
+                        )}
+                      class='text-xs border border-gray-200 rounded px-1 py-0.5 bg-white'
+                    >
+                      <option value='viewer'>Viewer</option>
+                      <option value='editor'>Editor</option>
+                    </select>
+                    <button
+                      type='button'
+                      onClick={() => removeShare(s.memberId)}
+                      class='text-xs text-red-400 hover:text-red-600'
+                    >
+                      remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+        <form class='flex items-center gap-2' onSubmit={addShare}>
+          <input
+            list={`members-${demo.name}`}
+            type='email'
+            value={member}
+            onInput={(e) => setMember((e.target as HTMLInputElement).value)}
+            placeholder='colleague@company.com'
+            class='flex-1 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500'
+          />
+          <datalist id={`members-${demo.name}`}>
+            {members.map((m) => <option key={m.id} value={m.id} />)}
+          </datalist>
+          <select
+            value={addRole}
+            onChange={(e) =>
+              setAddRole(
+                (e.target as HTMLSelectElement).value as 'viewer' | 'editor',
+              )}
+            class='text-xs border border-gray-300 rounded px-1 py-1 bg-white'
+          >
+            <option value='viewer'>Viewer</option>
+            <option value='editor'>Editor</option>
+          </select>
+          <button
+            type='submit'
+            disabled={busy}
+            class='px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400'
+          >
+            {busy ? '...' : 'Add'}
+          </button>
+        </form>
+      </div>
+    </details>
   )
 }
 

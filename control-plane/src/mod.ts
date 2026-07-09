@@ -7,11 +7,12 @@ import { pull, push } from '@ar/client/db/sync'
 import platform from '@ar/client/platform'
 import gracefulShutdown from '@ar/client/utils/graceful-shutdown'
 import { load as loadRuntime } from '@ar/client/runtime'
-import { apiAuth, slackBotAuth } from './middleware/auth.ts'
+import { apiAuth, slackBotAuth, telemetryKeyAuth } from './middleware/auth.ts'
 import { resolveTenant } from './middleware/tenant.ts'
 import { auditMiddleware } from './middleware/audit.ts'
 import authApi from './api/auth.ts'
 import webApp from './api/web.ts'
+import { referred as proxyReferred } from './api/demos/proxy.ts'
 import agentsApi from './api/agents.ts'
 import configsApi from './api/configs.ts'
 import teamsApi from './api/teams.ts'
@@ -26,6 +27,7 @@ import auditApi from './api/audit.ts'
 import secretsApi from './api/secrets.ts'
 import runtimeApi from './api/runtime.ts'
 import telemetryApi from './api/telemetry.ts'
+import telemetryClientsApi from './api/telemetry-clients.ts'
 import systemApi from './api/system/routes.ts'
 import storageApi from './api/storage.ts'
 import demosApi from './api/demos/routes.ts'
@@ -95,7 +97,15 @@ app.use('/copy/*', apiAuth)
 app.use('/audit/*', apiAuth)
 app.use('/secrets/*', apiAuth)
 app.use('/runtime/*', apiAuth)
-app.use('/telemetry/*', apiAuth)
+app.use('/telemetry/*', (c, next) => {
+  const path = new URL(c.req.url).pathname
+  const isClients = path === '/telemetry/clients' ||
+    path.startsWith('/telemetry/clients/')
+  if (c.req.method === 'POST' && !isClients) {
+    return telemetryKeyAuth(c, next)
+  }
+  return apiAuth(c, next)
+})
 app.use('/storage/*', apiAuth)
 app.use('/demos/*', apiAuth)
 app.use('/api/demos/*', apiAuth)
@@ -148,6 +158,7 @@ app.route('/copy', copyApi)
 app.route('/audit', auditApi)
 app.route('/secrets', secretsApi)
 app.route('/runtime', runtimeApi)
+app.route('/telemetry/clients', telemetryClientsApi)
 app.route('/telemetry', telemetryApi)
 app.route('/storage', storageApi)
 app.route('/demos', demosApi)
@@ -187,6 +198,8 @@ app.post('/api/user/tenant', async (c) => {
     },
   })
 })
+
+app.all('*', proxyReferred)
 
 async function start(
   port = loadRuntime().controlPlane.port,

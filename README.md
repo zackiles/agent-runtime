@@ -403,6 +403,12 @@ Search, filter, and trace telemetry events across the platform. Filter by time
 range, log level, and client. Click a trace ID to see the full span waterfall
 for a single request.
 
+External apps post events to `POST /telemetry` with a **telemetry API key** in
+the `X-Telemetry-Key` header. Mint a key on the **Clients** tab of the telemetry
+page — the plaintext key is shown only once. Reading telemetry and managing
+clients stay admin-only. See [docs/telemetry.md](docs/telemetry.md) for the key
+format and full ingest/query reference.
+
 ![Telemetry](docs/assets/web-telemetry.png)
 
 ### Audit Log
@@ -440,6 +446,13 @@ showing each step (fetch, build, push).
 ![Artifacts — Build Logs](docs/assets/web-artifacts-logs.png)
 
 ## Development
+
+After cloning the repo, enable the git hooks once so commits are auto-formatted
+(the CI quality gate runs `deno fmt`):
+
+```bash
+deno task hooks
+```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide covering
 building from source, architecture, testing, and the web dashboard. See
