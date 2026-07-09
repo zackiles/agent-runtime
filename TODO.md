@@ -19,25 +19,50 @@ Tracked issues from the codebase audit performed on 2026-03-14.
 ### Critical
 
 - [ ] **Tenant isolation bypass via `X-Tenant` header**
-      `control-plane/src/middleware/tenant.ts:5-14` `tenantId` is taken directly
-      from the `X-Tenant` header or `tenant` query parameter with no validation
-      that the authenticated user is authorized for that tenant. Any
-      authenticated user can set `X-Tenant: other-tenant` and access another
-      tenant's agents, secrets, tools, audit logs, and telemetry. **Fix:**
-      Validate the tenant against the authenticated user's allowed tenants
-      before setting it in context. Maintain a user-to-tenant mapping and
-      enforce it in the middleware.
+      `control-plane/src/middleware/tenant.ts` `resolveTenant` takes `tenantId`
+      directly from the `X-Tenant` header, `?tenant=` query param, or
+      `ar_tenant` cookie with no check that the authenticated caller belongs to
+      that tenant, then calls `ensure(email)` — which **auto-provisions** the
+      caller into whatever tenant they named. Any API-token caller can set
+      `X-Tenant: other-tenant` and reach another tenant's agents, secrets,
+      tools, audit logs, and telemetry.
+
+  **Currently documented as intentional** (`docs/iam.md` → "Tenant Isolation",
+  `SECURITY-TODO.md` #13/#44): tenants are modelled as environments
+  (`dev`/`staging`/`prod`) within one org, isolation is logical (separate
+  SQLite DB + `{tenantId}/` GCS prefix), and the real trust boundary is
+  `AR_ALLOWED_DOMAINS` + Google-verified identity. It is left open for the
+  frictionless "any org member can use any environment" workflow, and because
+  the CLI (`--tenant`/`AR_TENANT`), deployed agents (`AR_TENANT_ID` →
+  `X-Tenant` callbacks), and audit all pass the tenant as an out-of-band
+  routing hint rather than an identity-bound claim.
+
+  **Key asymmetry to resolve:** the web path is _not_ open — `webAuth`
+  (`control-plane/src/middleware/auth.ts`) gates on `getUser(email)` and 403s
+  un-invited users ("Not Invited"), while the API path uses `ensure(email)` and
+  auto-creates them. So `X-Tenant` on an API token is a real privilege gap even
+  within the current model.
+
+  **Best fix:** enforce membership in `resolveTenant`, mirroring `webAuth` —
+  replace `ensure(email)` with `get(email)` and return 403 when the caller is
+  not a member. Make membership explicit (a `tenant_member` table, or treat a
+  per-tenant `user` row as membership) with an admin invite surface
+  (`POST /tenants/:id/members` + `ar tenant invite` + UI), and backfill existing
+  users on rollout.
+
+  **Tradeoffs:** (1) removes the zero-friction onboarding `ensure()` provides —
+  every user must be invited to every tenant, and new tenants need an explicit
+  first-member bootstrap; (2) **breaks non-human callers unless allowlisted** —
+  the worker SA on agent callbacks, the admin/CI SA on deploys, and the Slack
+  bot SA must be provisioned as members or agents/deploys 403 (highest-risk part
+  of the change); (3) cross-tenant `copy.ts` and dev→prod promotion must handle
+  a caller belonging to both source and target; (4) requires new invite/member
+  endpoints, CLI, UI, migration, and tests; (5) necessary but not sufficient for
+  true customer isolation — data at rest is still co-mingled in some flows
+  (cross-tenant copy + DB sync, `SECURITY-TODO.md` #42), which would additionally
+  need physical/credential separation.
 
 ### High
-
-- [ ] **Unsigned session cookie allows impersonation**
-      `control-plane/src/mod.ts:79-91`,
-      `control-plane/src/middleware/auth.ts:146-159` The `ar_session` cookie is
-      `btoa(JSON.stringify({email}))` with no HMAC or signature. Anyone can
-      forge a valid session cookie for any email address. The auth middleware
-      trusts this value directly via `JSON.parse(atob(session))`. **Fix:**
-      HMAC-sign the cookie using a server-side secret, or use a server-side
-      session store with a random session ID in the cookie.
 
 - [ ] **Command injection in tool resolution fallback**
       `sdk-agent-nodejs/src/tools.ts:71-101` When `resolveBinary` cannot find a
@@ -47,39 +72,13 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       Throw an error when no binary is found instead of falling back to `name`.
       Use `execFileSync` (no shell) instead of `execSync`.
 
-- [ ] **Path traversal in static file serving**
-      `control-plane/src/mod.ts:116-120` The `file` parameter from
-      `/web/static/*` is used directly without normalization. A request to
-      `/web/static/../../../etc/passwd` reads files outside the `dist`
-      directory. **Fix:** Normalize the resolved path and verify it starts with
-      the `dist` root directory.
-
 - [ ] **Path traversal in tar extraction** `cli/src/utils/archive.ts:67-82`
       `entry.path` from the archive is joined to `dest` without validation. A
       malicious archive with paths like `../../etc/crontab` writes files outside
       the destination directory. **Fix:** After `join(dest, entry.path)`, verify
       the resolved absolute path starts with `resolve(dest)`.
 
-- [ ] **Storage API has no bucket or path validation**
-      `control-plane/src/api/storage.ts:7-62` `bucket` and `path` are
-      user-controlled with no allowlist or sanitization. An attacker could
-      target arbitrary GCS buckets or use path traversal patterns in the path
-      parameter. **Fix:** Validate `bucket` against an allowlist derived from
-      the project config. Validate `path` does not contain `..` segments.
-
 ### Medium
-
-- [ ] **OAuth flow missing CSRF `state` parameter**
-      `control-plane/src/mod.ts:42-50` The OAuth authorization URL has no
-      `state` parameter. An attacker can initiate an OAuth flow and trick a user
-      into completing it, linking the attacker's session to the victim's
-      account. **Fix:** Generate a random `state` value, store it in a
-      short-lived cookie, and verify it in the callback handler.
-
-- [ ] **Session cookie missing `Secure` flag** `control-plane/src/mod.ts:89` The
-      `Set-Cookie` header omits `Secure`, allowing the cookie to be transmitted
-      over plain HTTP if the deployment is misconfigured. **Fix:** Add `Secure`
-      to the cookie flags for production deployments.
 
 - [ ] **Install scripts receive full `process.env`**
       `sdk-agent-nodejs/src/tools.ts:77-85` Tool install scripts receive the
@@ -136,13 +135,6 @@ Tracked issues from the codebase audit performed on 2026-03-14.
 
 ### High
 
-- [ ] **Fire-and-forget DB open (race condition)**
-      `control-plane/src/middleware/tenant.ts:12` `open()` is async but not
-      awaited. `next()` runs before the database is ready. Request handlers may
-      operate on an uninitialized or stale database. **Fix:** `await open(...)`
-      before calling `next()`, or ensure the DB is opened during server startup
-      for known tenants.
-
 - [ ] **Unguarded `JSON.parse` on user input in agent handlers**
       `cli/src/commands/agent.ts:336`,
       `sdk-client-deno/src/templates/agent-default.ts:14` `JSON.parse(req.body)`
@@ -150,7 +142,7 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       bodies crash the agent process. **Fix:** Wrap in try/catch and return a
       400 error for invalid JSON.
 
-- [ ] **Swallowed errors in web dashboard** `web/src/islands/audit-table.tsx:22`
+- [ ] **Swallowed errors in web dashboard** `web/src/islands/audit.tsx:21-26`
       `.catch(() => {})` silently discards fetch errors with no error state or
       user feedback. The UI appears to work but shows stale or no data. **Fix:**
       Set an error state and display feedback to the user.
@@ -181,11 +173,6 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       config files crash the process with an unhelpful error. **Fix:** Wrap in
       try/catch and surface clear validation error messages.
 
-- [ ] **Unguarded `JSON.parse` on JWT payload** `control-plane/src/mod.ts:79`
-      `JSON.parse(atob(tokens.id_token.split('.')[1]))` can throw on a malformed
-      JWT from the OAuth token exchange. **Fix:** Wrap in try/catch and return
-      an appropriate error response.
-
 - [ ] **Unguarded `JSON.parse` on DB JSON columns**
       `sdk-client-deno/src/db/telemetry.ts:66-74`,
       `sdk-client-deno/src/db/audit.ts:96`,
@@ -207,21 +194,12 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       failures at warning level. Consider a retry mechanism or health check that
       surfaces sync status.
 
-- [ ] **Stack trace loss in CLI error handling** `cli/src/cli.ts:86-91` Errors
-      are wrapped with `new Error(...)`, losing the original stack trace.
-      **Fix:** Use the `cause` option: `new Error(msg, { cause: original })`.
-
 - [ ] **No pagination on list endpoints** `control-plane/src/api/agents.ts`
       `listByTenant` returns all agents with no `limit`/`offset`. As the dataset
       grows, this becomes a performance and memory problem. **Fix:** Add `limit`
       and `offset` query parameters with sensible defaults.
 
 ### Low
-
-- [ ] **Sequential awaits that could be parallel**
-      `cli/src/commands/agent.ts:375-381` `functionDescribeUri` and
-      `getIdentityToken` are awaited sequentially but are independent. Could use
-      `Promise.all` for faster execution.
 
 - [ ] **Node SDK uses `console` instead of structured logger**
       `sdk-agent-nodejs/src/audit.ts:51-88` Direct `console.error` and
@@ -231,16 +209,9 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       sensitive fields are sanitized before logging.
 
 - [ ] **Magic numbers for timeouts and intervals**
-      `sdk-client-deno/src/platform/gcp-rest.ts:134,145`,
-      `sdk-client-deno/src/db/mod.ts:58`, `web/src/islands/settings-form.tsx:15`
-      Hardcoded values like `300000`, `5000`, `2000` scattered across files.
+      `sdk-client-deno/src/platform/gcp-rest.ts`, `sdk-client-deno/src/db/mod.ts`
+      Hardcoded values like `300000`, `5000`, `500` scattered across files.
       **Fix:** Extract to named constants or make configurable.
-
-- [ ] **Global mutable state in web dashboard**
-      `web/src/islands/copy-agent.tsx:27-31`
-      `(globalThis as Record<string, unknown>).__AR_USER__` is fragile global
-      access with type assertions. **Fix:** Use Preact context or a lightweight
-      state management approach.
 
 ---
 
@@ -292,13 +263,6 @@ Tracked issues from the codebase audit performed on 2026-03-14.
   - Implement SSE (`text/event-stream`) for the logs endpoint
   - Add an SSE endpoint for real-time agent output
 
-- [ ] **Use streaming for storage instead of base64-in-JSON**
-      `control-plane/src/api/storage.ts`,
-      `sdk-client-deno/src/platform/control-plane.ts:258-266` Binary data is
-      base64-encoded inside JSON, roughly doubling memory usage and preventing
-      streaming of large files. **Recommendation:** Use `multipart/form-data`
-      for uploads and stream binary responses directly for downloads.
-
 - [ ] **Lazy-load CLI commands** `cli/src/cli.ts:12-54` All commands are
       imported eagerly via top-level `await import()` at startup, slowing
       startup time proportional to the number of commands. **Recommendation:**
@@ -330,8 +294,3 @@ Tracked issues from the codebase audit performed on 2026-03-14.
       The control plane is always compiled for linux x86_64 only. Local
       development on macOS requires running via source. **Recommendation:** Add
       optional darwin/arm64 target for local development builds.
-
-- [ ] **Add `package-lock.json` for web package** `web/` No lockfile committed
-      for the web package. `npm ci` may produce different results across
-      environments. **Recommendation:** Run `npm install` and commit the
-      lockfile.
