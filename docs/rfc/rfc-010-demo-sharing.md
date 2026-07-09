@@ -372,15 +372,36 @@ A capability check (`can(role, action)`) gates each route per the matrix in
 ### 7.2 Proxy (viewing) — `control-plane/src/api/demos/proxy.ts`
 
 `resolveDemo` (lines 22–37) is replaced by a call to `resolveAccess` with no
-role requirement beyond "can view" (owner/editor/viewer/admin all pass). The
-rest of `handle`/`forward` is unchanged: public demos still 302 to the Cloud
-Run URL; private demos are still proxied as the runtime SA. The only difference
-is that a viewer/editor now resolves where previously only the owner or an admin
-did.
+role requirement beyond "can view" (owner/editor/viewer/admin all pass), so a
+viewer/editor now resolves where previously only the owner or an admin did.
+Public demos still 302 to the Cloud Run URL; private demos are still proxied as
+the runtime SA.
 
-The `referred()` fallback (proxy.ts lines 164–195), which re-routes
-root-absolute asset requests using the `Referer`, calls the same resolver so
-shared viewers get working asset loads too.
+The one behavioral change beyond resolution is that **the owner hint must
+survive the whole proxied session**, not just the first request. The proxy
+serves a demo under the flat `/web/d/{slug}` prefix and rewrites URLs against it
+(`rewriteHtml` injects `<base href="/web/d/{slug}/">` and rewrites
+`href`/`src`/`action`; `rewriteLocation` prefixes redirects — proxy.ts lines
+39–64). Those rewrites currently know only `name`, so on a shared demo opened as
+`/web/d/foo?owner=alice`, every follow-up request (a relative
+`/web/d/foo/main.js`, a root-absolute `/data.json`, or a redirect) would arrive
+with no `owner`, and `resolveAccess`'s owner-wins rule (or a second matching
+share) could silently route it to the wrong `foo`. To prevent that:
+
+- **`handle()` reads `owner` from the request query, then falls back to the
+  `Referer`'s `owner`.** Sub-path assets loaded via the injected `<base href>`
+  carry a `Referer` of `/web/d/foo?owner=alice`, so the hint is recoverable even
+  when the asset URL itself has no query.
+- **`rewriteHtml` / `rewriteLocation` preserve the hint** by carrying `?owner=`
+  into the injected `<base href>` and appending it to prefixed root-absolute
+  attribute/redirect rewrites, so browser-resolved URLs keep the owner.
+- **`referred()` (proxy.ts lines 164–195)** already recovers the demo `name`
+  from the `Referer`; it is extended to also parse `owner` from the `Referer`'s
+  query and pass it as `ownerHint`, so root-absolute asset requests that bypass
+  the `<base href>` still resolve to the right owner.
+
+For owned demos (the common case) `ownerHint` is absent and behavior is
+identical to today.
 
 ### 7.3 Slug collisions and `ownerHint`
 
@@ -518,16 +539,24 @@ share subcommands, parsed the same way as the existing
 | `demo unshare {name} {email}`            | Revoke access                                      |
 | `demo shares {name}`                     | List who a demo is shared with                     |
 
-- The bot calls the same `POST /:name/shares`, `DELETE /:name/shares/:member`,
-  and `GET /:name/shares` endpoints through the control plane using the caller's
-  identity (`slackBotAuth`), so authorization is enforced server-side exactly as
-  for the web UI — the bot stays a thin translation layer (RFC-002 principle).
+- **The bot invokes the sharing logic in-process, not over HTTP.** The demo API
+  routes are mounted behind `apiAuth` (`/api/demos/*` and `/demos/*` in
+  `control-plane/src/mod.ts`), which expects a Google identity bearer the Slack
+  handler does not hold; and per AGENTS.md ("the bot imports internal functions
+  directly … rather than making HTTP calls to itself") the existing demo command
+  already calls `invokeAgent` / `deployContainer` / `destroyContainer` directly.
+  The share subcommands follow the same pattern: they call `resolveAccess` +
+  `can()` for authorization and the `demo-shares.ts` DB module
+  (`upsert`/`remove`/`forDemo`) plus `ensure` / `validateDomain` directly, with
+  the caller's email resolved by `slackBotAuth` as today. Authorization is
+  therefore identical to the web path because both call the same `resolveAccess`
+  helper — not because both hit the same HTTP route.
 - The `demos` list command (`commands/demos.ts`) shows shared demos with a role
   suffix, e.g. `● bean-scene (running, private) — shared: editor`.
 - Because shared demos are keyed by owner, the bot resolves them through
-  `resolveAccess` server-side; the caller only ever types the slug. If a slug is
-  ambiguous, the API returns the candidate owners and the bot asks the user to
-  disambiguate (`demo shares {name}` shows the owner column).
+  `resolveAccess` in-process; the caller only ever types the slug. If a slug is
+  ambiguous, `resolveAccess` returns the candidate owners and the bot asks the
+  user to disambiguate (`demo shares {name}` shows the owner column).
 
 Wiring, per the AGENTS.md "adding a new command" checklist: extend the parser in
 `commands/demo.ts`, keep `dispatch.ts`'s `demo` route (no new top-level
