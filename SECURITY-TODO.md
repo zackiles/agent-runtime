@@ -7,6 +7,23 @@ Full audit across `control-plane/`, `cli/`, `sdk-client-deno/`, `sdk-agent-nodej
 
 ## MEDIUM
 
+### 5. OAuth Login `state` Not Bound to the Browser (Login CSRF, partially addressed)
+
+**File:** `control-plane/src/api/auth.ts`
+
+`/login` now sends a `state` and `/callback` verifies it, but `state` is a signed
+**constant** (`encode({ email: 'oauth-login' })`) — identical for every login,
+with no per-request nonce stored in a cookie and checked on callback. Any user
+can fetch a valid signed state from `/web/auth/login` and reuse it in another
+browser's `/web/auth/callback`, so the callback is not bound to the victim's
+login attempt and the login-CSRF vector described by the original item remains.
+
+**Fix:** Generate a random nonce per login, store it in a short-lived `HttpOnly`
+cookie, embed it in the signed `state`, and require the callback's state nonce to
+match the cookie before exchanging the code.
+
+---
+
 ### 6. Default Session Secret (partially addressed)
 
 **File:** `control-plane/src/session.ts`
@@ -386,6 +403,26 @@ with Slack's reference implementation. Not exploitable in practice.
 
 ---
 
+### 42. Cross-Tenant Copy Writes to the Wrong Tenant DB (data loss)
+
+**File:** `sdk-client-deno/src/db/copy.ts`, `sdk-client-deno/src/db/mod.ts`
+
+`execute()` writes through `getDb()`, which returns the **active** tenant's DB —
+the source tenant opened for the request. The copy INSERTs are tagged
+`tenant_id = toTenant` but physically land in `${fromTenant}.db`. It then calls
+`scheduleSync(toTenant)`, which pushes the target tenant's own DB entry
+(`${toTenant}.db`) — either not open (a no-op) or a file that never received the
+rows. So a `dev → prod` copy writes prod rows into `dev.db` and never uploads
+them to `prod/registry.db`; the copied entities are invisible when prod is
+opened. This is an actionable correctness bug, not expected behavior.
+
+**Fix:** Perform the copy INSERTs against the **target** tenant's DB handle (open
+it and write there), reading source entities from the source DB, so the rows land
+in `${toTenant}.db` and `scheduleSync(toTenant)` uploads them to
+`toTenant/registry.db`.
+
+---
+
 ## LOW
 
 ### 32. Agent SDK Uses `x-user-email` / `x-user-id` Headers for Session
@@ -518,22 +555,6 @@ security-gating concern in the current usage patterns.
 
 ---
 
-### 42. Cross-Tenant Copy Co-Mingles Rows Before Sync
-
-**File:** `sdk-client-deno/src/db/sync.ts`, `sdk-client-deno/src/db/copy.ts`
-
-Each tenant now has its own SQLite file (`${tenantId}.db`), and `sync.ts` uploads
-that whole file to GCS. Cross-tenant copy, however, still writes rows with
-`tenant_id = targetTenant` into the request's active (source) DB via `getDb()`,
-then runs `scheduleSync(targetTenant)`. So a copy can transiently place the
-target tenant's rows in the source tenant's file. This is consistent with the
-documented logical-tenant model (see `docs/iam.md`).
-
-**Fix:** Only relevant if the tenant model changes to require strict physical
-isolation. Under the current model, this is expected behavior.
-
----
-
 ## INFO / BY DESIGN
 
 ### 43. `secrets.jsonc` on Disk
@@ -553,13 +574,15 @@ untrusted location.
 
 ## Priority Order
 
-Items #1–#5, #7, #8, #18, #23, #31, and #38 have been resolved or are no longer
+Items #1–#4, #7, #8, #18, #23, #31, and #38 have been resolved or are no longer
 applicable and were removed. Numbering of the remaining items is preserved so
 existing cross-references stay valid.
 
 **Before next deploy:**
 
+- [ ] Fix cross-tenant copy writing to the wrong tenant DB (#42)
 - [ ] Sign access callback context (#15)
+- [ ] Bind OAuth login `state` to the browser via a nonce cookie (#5)
 - [ ] Move the Cloud Run session-secret guard to startup (#6)
 
 **Short-term:**
